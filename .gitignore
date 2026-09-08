@@ -1,0 +1,7 @@
+build/
+build-*/
+*.so
+*.o
+*.hpkg
+*.zip
+.DS_Store
