@@ -22,7 +22,7 @@
 
 #ifdef __cplusplus
 
-// DoublyLinkedListLink
+
 template<typename Element>
 class DoublyLinkedListLink {
 public:
@@ -30,7 +30,7 @@ public:
 	Element*	previous;
 };
 
-// DoublyLinkedListLinkImpl
+
 template<typename Element>
 class DoublyLinkedListLinkImpl {
 private:
@@ -46,7 +46,7 @@ private:
 	DLL_Link	fDoublyLinkedListLink;
 };
 
-// DoublyLinkedListStandardGetLink
+
 template<typename Element>
 class DoublyLinkedListStandardGetLink {
 private:
@@ -64,7 +64,7 @@ public:
 	}
 };
 
-// DoublyLinkedListMemberGetLink
+
 template<typename Element,
 	DoublyLinkedListLink<Element> Element::* LinkMember = &Element::fLink>
 class DoublyLinkedListMemberGetLink {
@@ -83,7 +83,7 @@ public:
 	}
 };
 
-// DoublyLinkedListCLink - interface to struct list
+
 template<typename Element>
 class DoublyLinkedListCLink {
 	private:
@@ -101,12 +101,12 @@ class DoublyLinkedListCLink {
 		}
 };
 
-// for convenience
+
 #define DOUBLY_LINKED_LIST_TEMPLATE_LIST \
 	template<typename Element, typename GetLink>
 #define DOUBLY_LINKED_LIST_CLASS_NAME DoublyLinkedList<Element, GetLink>
 
-// DoublyLinkedList
+
 template<typename Element,
 	typename GetLink = DoublyLinkedListStandardGetLink<Element> >
 class DoublyLinkedList {
@@ -358,14 +358,14 @@ public:
 	static inline Element* GetNext(Element* element);
 
 	inline bool Contains(Element* element) const;
-		// O(n)!
+
 
 	inline int32 Count() const;
-		// O(n)!
+
 
 	template<typename Less>
 	void Sort(const Less& less);
-		// O(n^2)
+
 
 	inline Iterator GetIterator()				{ return Iterator(this); }
 	inline ConstIterator GetIterator() const	{ return ConstIterator(this); }
@@ -377,7 +377,7 @@ public:
 
 private:
 	inline void Insert(Element* before, Element* element);
-		// TODO: Obsolete! Use InsertBefore() instead!
+
 
 private:
 	Element*		fFirst;
@@ -387,9 +387,9 @@ private:
 };
 
 
-// inline methods
 
-// Insert
+
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* element, bool back)
@@ -402,7 +402,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* element, bool back)
 
 		Link* elLink = sGetLink(element);
 		if (back) {
-			// append
+
 			elLink->previous = fLast;
 			elLink->next = NULL;
 			if (fLast)
@@ -411,7 +411,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* element, bool back)
 				fFirst = element;
 			fLast = element;
 		} else {
-			// prepend
+
 			elLink->previous = NULL;
 			elLink->next = fFirst;
 			if (fFirst)
@@ -492,7 +492,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* before, Element* element)
 }
 
 
-// Add
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::Add(Element* element, bool back)
@@ -500,7 +500,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Add(Element* element, bool back)
 	Insert(element, back);
 }
 
-// Remove
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::Remove(Element* element)
@@ -529,7 +529,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Remove(Element* element)
 	elLink->next = elLink->previous = NULL;
 }
 
-// Swap
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::Swap(Element* a, Element* b)
@@ -552,7 +552,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Swap(Element* a, Element* b)
 	}
 }
 
-// TakeFrom
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::TakeFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList)
@@ -571,7 +571,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::TakeFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList)
 	}
 }
 
-// RemoveAll
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::RemoveAll()
@@ -580,7 +580,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveAll()
 	fLast = NULL;
 }
 
-// RemoveHead
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 Element*
 DOUBLY_LINKED_LIST_CLASS_NAME::RemoveHead()
@@ -590,7 +590,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveHead()
 	return element;
 }
 
-// RemoveTail
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 Element*
 DOUBLY_LINKED_LIST_CLASS_NAME::RemoveTail()
@@ -600,7 +600,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveTail()
 	return element;
 }
 
-// GetPrevious
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 Element*
 DOUBLY_LINKED_LIST_CLASS_NAME::GetPrevious(Element* element)
@@ -611,7 +611,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::GetPrevious(Element* element)
 	return result;
 }
 
-// GetNext
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 Element*
 DOUBLY_LINKED_LIST_CLASS_NAME::GetNext(Element* element)
@@ -636,7 +636,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Contains(Element* _element) const
 }
 
 
-// Count
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 int32
 DOUBLY_LINKED_LIST_CLASS_NAME::Count() const
@@ -653,7 +653,7 @@ template<typename Less>
 void
 DOUBLY_LINKED_LIST_CLASS_NAME::Sort(const Less& less)
 {
-	// selection sort
+
 	Element* tail = Head();
 	while (tail != NULL) {
 		Element* leastElement = tail;
@@ -672,10 +672,10 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Sort(const Less& less)
 }
 
 
-// sGetLink
+
 DOUBLY_LINKED_LIST_TEMPLATE_LIST
 GetLink DOUBLY_LINKED_LIST_CLASS_NAME::sGetLink;
 
-#endif	/* __cplusplus */
+#endif
 
-#endif	// _KERNEL_UTIL_DOUBLY_LINKED_LIST_H
+#endif

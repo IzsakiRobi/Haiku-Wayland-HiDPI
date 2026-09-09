@@ -14,7 +14,7 @@
 static void Assert(bool cond) {if (!cond) abort();}
 
 
-//#pragma mark - xdg_base
+
 
 
 HaikuXdgShell *HaikuXdgShell::Create(struct wl_display *display)
@@ -42,7 +42,7 @@ void HaikuXdgShell::Bind(struct wl_client *wl_client, uint32_t version, uint32_t
 
 HaikuXdgWmBase::~HaikuXdgWmBase()
 {
-	// TODO: delete owned surfaces
+
 
 	fShell->fClients.Remove(this);
 }

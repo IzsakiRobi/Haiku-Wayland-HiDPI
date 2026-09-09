@@ -13,7 +13,7 @@ extern const struct wl_interface wl_subcompositor_interface;
 #define SUBCOMPOSITOR_VERSION 1
 
 
-//#pragma mark - HaikuSubcompositor
+
 
 class HaikuSubcompositor: public WlSubcompositor {
 protected:
@@ -51,7 +51,7 @@ void HaikuSubcompositor::HandleGetSubsurface(uint32_t id, struct wl_resource *su
 }
 
 
-//#pragma mark - HaikuSubsurface
+
 
 HaikuSubsurface *HaikuSubsurface::Create(struct wl_client *client, uint32_t version, uint32_t id, struct wl_resource *surface, struct wl_resource *parent)
 {

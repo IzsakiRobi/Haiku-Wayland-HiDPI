@@ -1,3 +1,4 @@
+#include "HaikuScale.h"
 #include "HaikuSeat.h"
 #include "HaikuCompositor.h"
 #include "HaikuXdgSurface.h"
@@ -140,7 +141,7 @@ uint32_t FromHaikuKeyCode(uint32 haikuKey)
 		case 0x6b: wlKey = KEY_RO; break;
 
 		default:
-			//fprintf(stderr, "[!] unknown key: %#x\n", haikuKey);
+
 			wlKey = 0;
 	}
 	return wlKey;
@@ -205,7 +206,7 @@ void SurfaceCursorHook::HandleCommit()
 }
 
 
-//#pragma mark - HaikuPointer
+
 
 HaikuPointer::~HaikuPointer()
 {
@@ -230,7 +231,7 @@ HaikuKeyboard::~HaikuKeyboard()
 }
 
 
-//#pragma mark - HaikuSeat
+
 
 HaikuSeatGlobal *HaikuSeatGlobal::Create(struct wl_display *display)
 {
@@ -300,10 +301,10 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 		switch (fTrack.id) {
 		case trackClient:
 			FractionalTrace("pointer.enter surface=%p haiku=%.3f,%.3f wayland=%.3f,%.3f",
-				surface, where.x, where.y, where.x, where.y);
+				surface, where.x, where.y, ToLogical(where).x, ToLogical(where).y);
 			for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 				if (pointer->Client() != surface->Client()) continue;
-				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y));
 				pointer->SendFrame();
 			}
 			break;
@@ -313,7 +314,7 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 				msg.FindMessage("be:drag_message", &data);
 				HaikuDataOffer *dataOffer = HaikuDataOffer::Create(fDataDevice, data);
 				if (dataOffer != NULL) {
-					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y), dataOffer->ToResource());
+					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y), dataOffer->ToResource());
 				}
 			}
 			break;
@@ -508,7 +509,7 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			if (oldBtns == 0 && btns != 0) {
 				fTrack.captured = true;
 				fTrack.origin = where;
-				AppKitPtrs::LockedPtr(surface->View())->SetMouseEventMask(B_POINTER_EVENTS);
+				AppKitPtrs::LockedPtr(surface->View())->SetMouseEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
 			}
 			fOldMouseBtns = btns;
 			switch (fTrack.id) {
@@ -581,21 +582,30 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			uint32 btns;
 			msg->FindInt64("when", &when);
 			msg->FindPoint("be:view_where", &where);
+
+
+
+			if (fHaveLastMotion && fLastMotionSurface == surface
+				&& fLastMotionWhere == where)
+				return true;
+			fLastMotionSurface = surface;
+			fLastMotionWhere = where;
+			fHaveLastMotion = true;
 			switch (fTrack.id) {
 				case trackNone:
 				case trackClient: {
 					FractionalTrace("pointer.motion surface=%p haiku=%.3f,%.3f wayland=%.3f,%.3f",
-						surface, where.x, where.y, where.x, where.y);
+						surface, where.x, where.y, ToLogical(where).x, ToLogical(where).y);
 					for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 						if (pointer->Client() != fPointerFocus->Client()) continue;
-						pointer->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+						pointer->SendMotion(when / 1000, wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y));
 						pointer->SendFrame();
 					}
 					break;
 				}
 				case trackDrag: {
 					if (fDataDevice != NULL)
-						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
+						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y));
 					break;
 				}
 				case trackMove: {
@@ -618,9 +628,9 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 								.data = &arrayData
 							};
 
-							xdgSurface->Toplevel()->SendConfigure(fTrack.wndWidth - (where.x - fTrack.origin.x), fTrack.wndHeight - (where.y - fTrack.origin.y), &array);
-							fTrack.wndWidth -= where.x - fTrack.origin.x;
-							fTrack.wndHeight -= where.y - fTrack.origin.y;
+							xdgSurface->Toplevel()->SendConfigure(fTrack.wndWidth - ((where.x - fTrack.origin.x) / DesktopScale()), fTrack.wndHeight - ((where.y - fTrack.origin.y) / DesktopScale()), &array);
+							fTrack.wndWidth -= (where.x - fTrack.origin.x) / DesktopScale();
+							fTrack.wndHeight -= (where.y - fTrack.origin.y) / DesktopScale();
 							xdgSurface->SendConfigure(xdgSurface->NextSerial());
 							break;
 						}
@@ -635,8 +645,8 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 							xdgSurface->Toplevel()->MaxSize(maxWidth, maxHeight);
 							if (maxWidth == 0) maxWidth = INT32_MAX;
 							if (maxHeight == 0) maxHeight = INT32_MAX;
-							int32_t newWidth = std::min<int32_t>(std::max<int32_t>(fTrack.wndWidth + (where.x - fTrack.origin.x), minWidth), maxWidth);
-							int32_t newHeight = std::min<int32_t>(std::max<int32_t>(fTrack.wndHeight + (where.y - fTrack.origin.y), minHeight), maxHeight);
+							int32_t newWidth = std::min<int32_t>(std::max<int32_t>(fTrack.wndWidth + ((where.x - fTrack.origin.x) / DesktopScale()), minWidth), maxWidth);
+							int32_t newHeight = std::min<int32_t>(std::max<int32_t>(fTrack.wndHeight + ((where.y - fTrack.origin.y) / DesktopScale()), minHeight), maxHeight);
 
 							uint32_t arrayData[] = {XdgToplevel::stateResizing};
 							struct wl_array array {

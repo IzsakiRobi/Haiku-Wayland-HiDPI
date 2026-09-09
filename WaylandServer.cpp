@@ -68,7 +68,7 @@ void ServerHandler::MessageReceived(BMessage *msg)
 
 class Application: public BApplication {
 private:
-	// TODO: support multiple clients
+
 	struct wl_client *fClient{};
 
 public:
@@ -110,7 +110,7 @@ void Application::MessageReceived(BMessage *msg)
 }
 
 
-//#pragma mark - entry points
+
 
 _EXPORT uint32 wl_ips_version = 2;
 
@@ -170,15 +170,15 @@ extern "C" _EXPORT int wl_ips_client_connected(void **clientOut, void *clientDis
 	*clientOut = client;
 
 	return 0;
-/*
-	wl_client_destroy(client);
-	wl_display_destroy(display);
-*/
+
+
+
+
 }
 
 extern "C" _EXPORT void wl_ips_client_disconnected(void *client)
 {
-	// TODO: implement
+
 }
 
 

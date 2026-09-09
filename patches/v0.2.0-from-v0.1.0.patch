@@ -1,0 +1,2061 @@
+diff --git a/AppKitPtrs.h b/AppKitPtrs.h
+index eefb1e5..fa1168a 100644
+--- a/AppKitPtrs.h
++++ b/AppKitPtrs.h
+@@ -77,4 +77,4 @@ ExternalPtr<T> MakeExternal(Args&&... args)
+ }
+ }
+ 
+-#endif	// _APPKITPTRS_H_
++#endif
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..6f81ee4
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,7 @@
++# Changelog
++
++## 0.2.0
++
++- Global HiDPI scaling based on Haiku desktop font size.
++- Correctly scaled input, windows and popups.
++- Faster menu updates by avoiding redraws for unchanged surface commits.
+diff --git a/FractionalTrace.h b/FractionalTrace.h
+new file mode 100644
+index 0000000..f1ffc33
+--- /dev/null
++++ b/FractionalTrace.h
+@@ -0,0 +1,27 @@
++#pragma once
++
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++inline bool FractionalTraceEnabled()
++{
++	static int enabled = []() {
++		const char* value = getenv("HAIWAY_FRACTIONAL_TRACE");
++		return value != NULL && value[0] != '\0' && value[0] != '0';
++	}();
++	return enabled != 0;
++}
++
++inline void FractionalTrace(const char* format, ...)
++{
++	if (!FractionalTraceEnabled())
++		return;
++	fprintf(stderr, "[haiway-fractional] ");
++	va_list args;
++	va_start(args, format);
++	vfprintf(stderr, format, args);
++	va_end(args);
++	fputc('\n', stderr);
++	fflush(stderr);
++}
+diff --git a/HaikuCompositor.cpp b/HaikuCompositor.cpp
+index 798a8c5..3f5628a 100644
+--- a/HaikuCompositor.cpp
++++ b/HaikuCompositor.cpp
+@@ -1,3 +1,4 @@
++#include "HaikuScale.h"
+ #include "HaikuCompositor.h"
+ #include "HaikuSubcompositor.h"
+ #include "HaikuShm.h"
+@@ -6,6 +7,7 @@
+ #include "HaikuXdgPopup.h"
+ #include "HaikuSeat.h"
+ #include "HaikuDataDeviceManager.h"
++#include "FractionalTrace.h"
+ #include "Wayland.h"
+ #include "WaylandEnv.h"
+ #include <wayland-server-core.h>
+@@ -30,7 +32,7 @@ extern const struct wl_interface wl_compositor_interface;
+ static void Assert(bool cond) {if (!cond) abort();}
+ 
+ 
+-//#pragma mark - HaikuRegion
++
+ 
+ class HaikuRegion: public WlRegion {
+ private:
+@@ -61,7 +63,7 @@ void HaikuRegion::HandleSubtract(int32_t x, int32_t y, int32_t width, int32_t he
+ }
+ 
+ 
+-//#pragma mark - HaikuCompositor
++
+ 
+ class HaikuCompositor: public WlCompositor {
+ protected:
+@@ -112,7 +114,7 @@ void HaikuCompositor::HandleCreateRegion(uint32_t id)
+ }
+ 
+ 
+-//#pragma mark - WaylandView
++
+ 
+ class WaylandView: public BView {
+ private:
+@@ -150,6 +152,9 @@ WaylandView::WaylandView(HaikuSurface *surface):
+ {
+ 	SetViewColor(B_TRANSPARENT_COLOR);
+ 
++
++	SetEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
++
+ 	char *envValue = getenv("HAIWAY_FRAMERATE_LIMIT");
+ 	if (envValue != NULL) {
+ 		fFramerateLimitDisabled = (strcmp(envValue, "disabled") == 0);
+@@ -221,14 +226,17 @@ void WaylandView::MessageReceived(BMessage *msg)
+ 				isPointerMessage = false;
+ 			}
+ 			HaikuSurface *surface = fSurface;
+-			while (isPointerMessage && !surface->InputRgnContains(where) && surface->Subsurface() != NULL) {
++
++
++			while (isPointerMessage && !surface->InputRgnContains(ToLogical(where))
++				&& surface->Subsurface() != NULL) {
++				where += AppKitPtrs::LockedPtr(surface->View())->Frame().LeftTop();
+ 				surface = surface->Subsurface()->Parent();
+ 			}
+-			if (surface != fSurface) {
+-				BPoint offset = AppKitPtrs::LockedPtr(fSurface->View())->Frame().LeftTop() - AppKitPtrs::LockedPtr(surface->View())->Frame().LeftTop();
+-				msg->ReplacePoint("be:view_where", where + offset);
+-			}
+-			if (seat->MessageReceived(surface, msg)) {
++			BMessage routed(*msg);
++			if (isPointerMessage && !msg->WasDropped())
++				routed.ReplacePoint("be:view_where", where);
++			if (seat->MessageReceived(surface, &routed)) {
+ 				return;
+ 			}
+ 		}
+@@ -242,7 +250,7 @@ void WaylandView::DrawSurfaceTree(BView *targetView, HaikuSurface *surface, BPoi
+ 
+ 	BBitmap *bmp = surface->Bitmap();
+ 	if (bmp != NULL) {
+-		BRect viewRect(origin.x, origin.y, origin.x + surface->Size().width, origin.y + surface->Size().height);
++		BRect viewRect = NativeRect(BRect(origin.x, origin.y, origin.x + surface->Size().width, origin.y + surface->Size().height));
+ 
+ 		BRegion targetClip;
+ 		targetView->GetClippingRegion(&targetClip);
+@@ -263,31 +271,43 @@ void WaylandView::DrawSurfaceTree(BView *targetView, HaikuSurface *surface, BPoi
+ 			}
+ 
+ 			const auto &viewportSrc = surface->fState.viewportSrc;
+-			const auto &viewportDst = surface->fState.viewportDst;
++			BRect bitmapRect = bmp->Bounds();
++			if (viewportSrc.IsValid()) {
++				float density = surface->fState.scale;
++				bitmapRect = BRect(viewportSrc.x * density, viewportSrc.y * density,
++					(viewportSrc.x + viewportSrc.width) * density - 1,
++					(viewportSrc.y + viewportSrc.height) * density - 1);
++			}
+ 
++			if (surface->EnsureNativeCache(bmp, bitmapRect, viewRect, mode)) {
++				targetView->SetDrawingMode(mode);
++				targetView->DrawBitmap(surface->fNativeCache,
++					surface->fNativeCache->Bounds(), viewRect, 0);
++			} else {
++				FractionalTrace("cache.fallback surface=%p mode=%d", surface, (int)mode);
+ 			if (mode == B_OP_ALPHA && surface->fState.opaqueRgn.has_value()) {
+-				BRegion opaque = surface->fState.opaqueRgn.value();
+-				opaque.OffsetBy(origin.x, origin.y);
++				BRegion opaque;
++				const BRegion &logicalOpaque = surface->fState.opaqueRgn.value();
++				for (int32 i = 0; i < logicalOpaque.CountRects(); ++i) {
++					BRect r = logicalOpaque.RectAt(i);
++					r.OffsetBy(origin);
++					opaque.Include(NativeRect(r));
++				}
+ 				opaque.IntersectWith(&targetClip);
+ 				targetView->ConstrainClippingRegion(&opaque);
+ 				targetView->SetDrawingMode(B_OP_COPY);
+-				if (viewportSrc.IsValid() && viewportDst.IsValid()) {
+-					BRect bitmapRect(viewportSrc.x, viewportSrc.y, viewportSrc.x + viewportSrc.width - 1, viewportSrc.y + viewportSrc.height - 1);
+-					targetView->DrawBitmap(bmp, bitmapRect, viewRect);
+-				} else {
+-					targetView->DrawBitmap(bmp, viewRect.LeftTop());
+-				}
++
++				targetView->DrawBitmap(bmp, bitmapRect, viewRect,
++					mode == B_OP_ALPHA ? B_FILTER_BITMAP_BILINEAR : 0);
+ 				BRegion remaining(targetClip);
+ 				remaining.Exclude(&opaque);
+ 				targetView->ConstrainClippingRegion(&remaining);
+ 			}
+ 
+ 			targetView->SetDrawingMode(mode);
+-			if (viewportSrc.IsValid() && viewportDst.IsValid()) {
+-				BRect bitmapRect(viewportSrc.x, viewportSrc.y, viewportSrc.x + viewportSrc.width - 1, viewportSrc.y + viewportSrc.height - 1);
+-				targetView->DrawBitmap(bmp, bitmapRect, viewRect);
+-			} else {
+-				targetView->DrawBitmap(bmp, viewRect.LeftTop());
++
++				targetView->DrawBitmap(bmp, bitmapRect, viewRect,
++					mode == B_OP_ALPHA ? B_FILTER_BITMAP_BILINEAR : 0);
+ 			}
+ 			targetView->ConstrainClippingRegion(&targetClip);
+ 		}
+@@ -344,56 +364,7 @@ void WaylandView::Draw(BRect dirty)
+ 	bool needsOffscreen = popup != NULL || !fSurface->SurfaceList().IsEmpty();
+ 
+ 	if (!needsOffscreen) {
+-		if (fOffscreenBitmap != NULL) {
+-			delete fOffscreenBitmap;
+-			fOffscreenBitmap = NULL;
+-			fOffscreenView = NULL;
+-		}
+-		BBitmap *bmp = fSurface->Bitmap();
+-		if (bmp != NULL) {
+-			drawing_mode mode = B_OP_COPY;
+-			switch (bmp->ColorSpace()) {
+-				case B_RGBA64:
+-				case B_RGBA32:
+-				case B_RGBA15:
+-				case B_RGBA64_BIG:
+-				case B_RGBA32_BIG:
+-				case B_RGBA15_BIG:
+-					mode = B_OP_ALPHA;
+-					break;
+-				default:
+-					mode = B_OP_COPY;
+-					break;
+-			}
+-
+-			const auto &viewportSrc = fSurface->fState.viewportSrc;
+-			const auto &viewportDst = fSurface->fState.viewportDst;
+-
+-			if (mode == B_OP_ALPHA && fSurface->fState.opaqueRgn.has_value()) {
+-				viewLocked->ConstrainClippingRegion(&fSurface->fState.opaqueRgn.value());
+-				viewLocked->SetDrawingMode(B_OP_COPY);
+-				if (viewportSrc.IsValid() && viewportDst.IsValid()) {
+-					BRect bitmapRect(viewportSrc.x, viewportSrc.y, viewportSrc.x + viewportSrc.width - 1, viewportSrc.y + viewportSrc.height - 1);
+-					BRect viewRect(0, 0, viewportDst.width - 1, viewportDst.height - 1);
+-					viewLocked->DrawBitmap(bmp, bitmapRect, viewRect);
+-				} else {
+-					viewLocked->DrawBitmap(bmp);
+-				}
+-				BRegion remaining = viewLocked->Bounds();
+-				remaining.Exclude(&fSurface->fState.opaqueRgn.value());
+-				viewLocked->ConstrainClippingRegion(&remaining);
+-			}
+-
+-			viewLocked->SetDrawingMode(mode);
+-			if (viewportSrc.IsValid() && viewportDst.IsValid()) {
+-				BRect bitmapRect(viewportSrc.x, viewportSrc.y, viewportSrc.x + viewportSrc.width - 1, viewportSrc.y + viewportSrc.height - 1);
+-				BRect viewRect(0, 0, viewportDst.width - 1, viewportDst.height - 1);
+-				viewLocked->DrawBitmap(bmp, bitmapRect, viewRect);
+-			} else {
+-				viewLocked->DrawBitmap(bmp);
+-			}
+-			viewLocked->ConstrainClippingRegion(NULL);
+-		}
++		DrawSurfaceTree(this, fSurface, B_ORIGIN);
+ 	} else {
+ 		bool isNewBitmap = false;
+ 		if (fOffscreenBitmap == NULL || fOffscreenBitmap->Bounds() != bounds) {
+@@ -413,6 +384,7 @@ void WaylandView::Draw(BRect dirty)
+ 		}
+ 
+ 		if (fOffscreenBitmap != NULL && fOffscreenBitmap->Lock()) {
++			fOffscreenView->SetDrawingMode(B_OP_COPY);
+ 			fOffscreenView->SetHighColor(ui_color(B_PANEL_BACKGROUND_COLOR));
+ 
+ 			if (isNewBitmap) {
+@@ -446,7 +418,7 @@ void WaylandView::Pulse(void)
+ 		fSurface->CallFrameCallbacks();
+ }
+ 
+-//#pragma mark - HaikuSurface
++
+ 
+ HaikuSurface::FrameCallback *HaikuSurface::FrameCallback::Create(struct wl_client *client, uint32_t version, uint32_t id)
+ {
+@@ -468,6 +440,7 @@ HaikuSurface *HaikuSurface::Create(struct wl_client *client, uint32_t version, u
+ 
+ HaikuSurface::~HaikuSurface()
+ {
++	InvalidateNativeCache();
+ 	HaikuSeatGlobal *seat = HaikuGetSeat(Client());
+ 	if (seat != NULL) {
+ 		seat->SetPointerFocus(this, false, BMessage());
+@@ -483,13 +456,106 @@ HaikuSurface::~HaikuSurface()
+ 	}
+ }
+ 
++void HaikuSurface::InvalidateNativeCache()
++{
++	delete fNativeCache;
++	fNativeCache = NULL;
++	fNativeCacheView = NULL;
++	fNativeCacheSerial = 0;
++	fNativeCacheSource = NULL;
++}
++
++bool HaikuSurface::EnsureNativeCache(BBitmap *source, const BRect &sourceRect,
++	const BRect &destRect, drawing_mode mode)
++{
++
++	static const bool enabled = [] {
++		const char* value = getenv("HAIWAY_NATIVE_CACHE");
++		return value != NULL && strcmp(value, "1") == 0;
++	}();
++	if (!enabled) return false;
++	if (source == NULL || !sourceRect.IsValid() || !destRect.IsValid()) {
++		FractionalTrace("cache.skip surface=%p source=%p valid=%d source_rect=%.1f,%.1f..%.1f,%.1f dest_rect=%.1f,%.1f..%.1f,%.1f",
++			this, source, source != NULL, sourceRect.left, sourceRect.top,
++			sourceRect.right, sourceRect.bottom, destRect.left, destRect.top,
++			destRect.right, destRect.bottom);
++		return false;
++	}
++
++	if (fNativeCache != NULL && fNativeCacheSerial == fContentSerial
++		&& fNativeCacheSource == source && fNativeCacheSourceRect == sourceRect
++		&& fNativeCacheDestRect == destRect && fNativeCacheMode == mode) {
++		FractionalTrace("cache.hit surface=%p serial=%llu", this, (unsigned long long)fContentSerial);
++		return true;
++	}
++
++	FractionalTrace("cache.create surface=%p serial=%llu source=%p colorspace=%d alpha=%d source_rect=%.1f,%.1f..%.1f,%.1f dest_rect=%.1f,%.1f..%.1f,%.1f",
++		this, (unsigned long long)fContentSerial, source,
++		(int)source->ColorSpace(), mode == B_OP_ALPHA,
++		sourceRect.left, sourceRect.top, sourceRect.right, sourceRect.bottom,
++		destRect.left, destRect.top, destRect.right, destRect.bottom);
++	BRect cacheBounds(0, 0, destRect.Width(), destRect.Height());
++	if (fNativeCache != NULL && (fNativeCache->Bounds() != cacheBounds
++		|| fNativeCache->ColorSpace() != source->ColorSpace()))
++		InvalidateNativeCache();
++	if (fNativeCache == NULL) {
++	fNativeCache = new(std::nothrow) BBitmap(cacheBounds, source->ColorSpace(),
++		true);
++	if (fNativeCache == NULL || fNativeCache->InitCheck() != B_OK) {
++		FractionalTrace("cache.alloc_failed surface=%p bounds=%.1fx%.1f",
++			this, cacheBounds.Width() + 1, cacheBounds.Height() + 1);
++		InvalidateNativeCache();
++		return false;
++	}
++	fNativeCacheView = new(std::nothrow) BView(cacheBounds, "surface-cache",
++		B_FOLLOW_NONE, B_WILL_DRAW);
++	if (fNativeCacheView == NULL) {
++		FractionalTrace("cache.view_alloc_failed surface=%p", this);
++		InvalidateNativeCache();
++		return false;
++	}
++	fNativeCache->AddChild(fNativeCacheView);
++	}
++
++	if (!fNativeCache->Lock()) {
++		FractionalTrace("cache.lock_failed surface=%p", this);
++		InvalidateNativeCache();
++		return false;
++	}
++	bigtime_t cacheStart = system_time();
++
++
++	memset(fNativeCache->Bits(), 0, fNativeCache->BitsLength());
++	fNativeCacheView->SetDrawingMode(mode);
++	fNativeCacheView->SetBlendingMode(B_PIXEL_ALPHA, B_ALPHA_COMPOSITE);
++	fNativeCacheView->DrawBitmap(source, sourceRect, cacheBounds,
++		mode == B_OP_ALPHA ? B_FILTER_BITMAP_BILINEAR : 0);
++	fNativeCacheView->Sync();
++	FractionalTrace("cache.render surface=%p us=%lld", this,
++		(long long)(system_time() - cacheStart));
++	fNativeCache->Unlock();
++
++	fNativeCacheSerial = fContentSerial;
++	fNativeCacheSource = source;
++	fNativeCacheSourceRect = sourceRect;
++	fNativeCacheDestRect = destRect;
++	fNativeCacheMode = mode;
++	FractionalTrace("cache.ready surface=%p cache=%p pixels=%.0fx%.0f",
++		this, fNativeCache, cacheBounds.Width() + 1, cacheBounds.Height() + 1);
++	return true;
++}
++
+ BSize HaikuSurface::Size() const
+ {
+ 	if (fState.viewportDst.IsValid()) {
+ 		return BSize(fState.viewportDst.width - 1, fState.viewportDst.height - 1);
+ 	}
++	if (fState.viewportSrc.IsValid()) {
++		return BSize(fState.viewportSrc.width - 1, fState.viewportSrc.height - 1);
++	}
+ 	if (Bitmap() != NULL) {
+-		return BSize(Bitmap()->Bounds().Width(), Bitmap()->Bounds().Height());
++		return BSize((Bitmap()->Bounds().Width() + 1) / fState.scale - 1,
++			(Bitmap()->Bounds().Height() + 1) / fState.scale - 1);
+ 	}
+ 	return BSize(-1, -1);
+ }
+@@ -498,6 +564,8 @@ void HaikuSurface::AttachWindow(BWindow *window)
+ {
+ 	Assert(fView == NULL);
+ 
++	window->SetPulseRate(16667);
++
+ 	fView = new WaylandView(this);
+ 	window->AddChild(fView);
+ 	fView->MakeFocus();
+@@ -549,19 +617,11 @@ void HaikuSurface::Invalidate()
+ 		return;
+ 	}
+ 
+-	if (fSubsurface != NULL) {
+-		HaikuSurface *root = fSubsurface->Root();
+-		if (root != NULL && root->View() != NULL) {
+-			auto rootLocked = AppKitPtrs::LockedPtr(root->View());
+-			int32_t offsetX = 0, offsetY = 0;
+-			fSubsurface->GetOffset(offsetX, offsetY);
+-			BRegion rootDirty(fDirty);
+-			rootDirty.OffsetBy(offsetX, offsetY);
+-			rootLocked->Invalidate(&rootDirty);
+-		}
+-	} else {
+-		auto viewLocked = AppKitPtrs::LockedPtr(fView);
+-		viewLocked->Invalidate(&fDirty);
++	HaikuSurface *root = fSubsurface != NULL ? fSubsurface->Root() : this;
++	if (root != NULL && root->View() != NULL) {
++
++
++		AppKitPtrs::LockedPtr(root->View())->Invalidate();
+ 	}
+ 	fDirty.MakeEmpty();
+ }
+@@ -596,7 +656,15 @@ void HaikuSurface::SetViewportDst(int32_t width, int32_t height)
+ 
+ void HaikuSurface::HandleAttach(struct wl_resource *buffer_resource, int32_t dx, int32_t dy)
+ {
++	fContentChanged = true;
+ 	fPendingState.buffer = HaikuShmBuffer::FromResource(buffer_resource);
++	if (fPendingState.buffer != NULL) {
++		BRect bounds = fPendingState.buffer->Bitmap().Bounds();
++		FractionalTrace("surface.attach surface=%p buffer=%p pixels=%.0fx%.0f offset=%d,%d",
++			this, fPendingState.buffer.Get(), bounds.Width() + 1, bounds.Height() + 1, dx, dy);
++	} else {
++		FractionalTrace("surface.attach surface=%p buffer=null offset=%d,%d", this, dx, dy);
++	}
+ 	fPendingState.dx = dx;
+ 	fPendingState.dy = dy;
+ 	fPendingFields |= (1 << fieldBuffer) | (1 << fieldOffset);
+@@ -604,8 +672,11 @@ void HaikuSurface::HandleAttach(struct wl_resource *buffer_resource, int32_t dx,
+ 
+ void HaikuSurface::HandleDamage(int32_t x, int32_t y, int32_t width, int32_t height)
+ {
++	fContentChanged = true;
+ 	width = std::min(width, 1 << 24);
+ 	height = std::min(height, 1 << 24);
++	FractionalTrace("surface.damage surface=%p logical=%d,%d %dx%d",
++		this, x, y, width, height);
+ 	fDirty.Include(BRect(x, y, x + width - 1, y + height - 1));
+ }
+ 
+@@ -637,7 +708,12 @@ void HaikuSurface::HandleSetInputRegion(struct wl_resource *region_resource)
+ 
+ void HaikuSurface::HandleCommit()
+ {
+-	//printf("HaikuSurface::HandleCommit()\n");
++
++
++
++	const uint32 nonVisual = (1U << fieldFrameCallbacks) | (1U << fieldInputRgn);
++	const bool repaint = fContentChanged || (fPendingFields & ~nonVisual) != 0
++		|| !SurfaceList().IsEmpty();
+ 
+ 	for (;;) {
+ 		uint32 field = std::countr_zero(fPendingFields);
+@@ -677,15 +753,38 @@ void HaikuSurface::HandleCommit()
+ 				break;
+ 		}
+ 	}
++	if (fContentChanged) {
++		++fContentSerial;
++		fContentChanged = false;
++	}
+ 
+ 	if (View() != NULL && View()->Window() != NULL) {
+ 		auto viewLocked = AppKitPtrs::LockedPtr(View());
++		BRect previousFrame = viewLocked->Frame();
+ 		if (fSubsurface != NULL) {
+-			viewLocked->MoveTo(fSubsurface->GetState().x, fSubsurface->GetState().y);
++			viewLocked->MoveTo(ToNative(BPoint(fSubsurface->GetState().x, fSubsurface->GetState().y)));
+ 		}
+ 		BSize size = Size();
+-		viewLocked->ResizeTo(size.width, size.height);
+-		Invalidate();
++		viewLocked->ResizeTo(NativeExtent(size.width), NativeExtent(size.height));
++		BRect frame = viewLocked->Frame();
++		BRect bounds = viewLocked->Bounds();
++		BRect windowFrame = viewLocked->Window()->Frame();
++		FractionalTrace("surface.commit surface=%p buffer_scale=%d"
++			" viewport_src=%.3f,%.3f %.3fx%.3f viewport_dst=%dx%d"
++			" logical_size=%.0fx%.0f view_frame=%.1f,%.1f..%.1f,%.1f"
++			" view_bounds=%.1f,%.1f..%.1f,%.1f window_frame=%.1f,%.1f..%.1f,%.1f",
++			this, fState.scale, fState.viewportSrc.x, fState.viewportSrc.y,
++			fState.viewportSrc.width, fState.viewportSrc.height,
++			fState.viewportDst.width, fState.viewportDst.height,
++			size.width + 1, size.height + 1,
++			frame.left, frame.top, frame.right, frame.bottom,
++			bounds.left, bounds.top, bounds.right, bounds.bottom,
++			windowFrame.left, windowFrame.top, windowFrame.right, windowFrame.bottom);
++		if (repaint || previousFrame != frame) {
++			Invalidate();
++		} else {
++			FractionalTrace("surface.skip_unchanged surface=%p", this);
++		}
+ 	}
+ 	if (fHook.IsSet()) {
+ 		fHook->HandleCommit();
+@@ -700,14 +799,22 @@ void HaikuSurface::HandleSetBufferTransform(int32_t transform)
+ 
+ void HaikuSurface::HandleSetBufferScale(int32_t scale)
+ {
++	FractionalTrace("surface.set_buffer_scale surface=%p scale=%d", this, scale);
++	if (scale <= 0) {
++		wl_resource_post_error(ToResource(), WL_SURFACE_ERROR_INVALID_SCALE, "buffer scale must be positive");
++		return;
++	}
+ 	fPendingState.scale = scale;
+ 	fPendingFields |= (1 << fieldScale);
+ }
+ 
+ void HaikuSurface::HandleDamageBuffer(int32_t x, int32_t y, int32_t width, int32_t height)
+ {
++	fContentChanged = true;
+ 	width = std::min(width, 1 << 24);
+ 	height = std::min(height, 1 << 24);
++	FractionalTrace("surface.damage_buffer surface=%p buffer=%d,%d %dx%d",
++		this, x, y, width, height);
+ 	fDirty.Include(BRect(x, y, x + width - 1, y + height - 1));
+ }
+ 
+diff --git a/HaikuCompositor.h b/HaikuCompositor.h
+index 9d06a1f..98a467f 100644
+--- a/HaikuCompositor.h
++++ b/HaikuCompositor.h
+@@ -103,6 +103,15 @@ private:
+ 	State fPendingState{};
+ 	uint32 fPendingFields{};
+ 	BRegion fDirty;
++	BBitmap *fNativeCache{};
++	BView *fNativeCacheView{};
++	uint64 fContentSerial = 1;
++	bool fContentChanged = false;
++	uint64 fNativeCacheSerial{};
++	BBitmap *fNativeCacheSource{};
++	BRect fNativeCacheSourceRect;
++	BRect fNativeCacheDestRect;
++	drawing_mode fNativeCacheMode = B_OP_COPY;
+ 	WaylandView *fView{};
+ 	HaikuXdgSurface *fXdgSurface{};
+ 	HaikuServerDecoration *fServerDecoration{};
+@@ -129,6 +138,9 @@ public:
+ 	void AttachViewsToEarlierSubsurfaces();
+ 	void Detach();
+ 	void Invalidate();
++	void InvalidateNativeCache();
++	bool EnsureNativeCache(BBitmap *source, const BRect &sourceRect,
++		const BRect &destRect, drawing_mode mode);
+ 	void CallFrameCallbacks();
+ 
+ 	void SetHook(Hook *hook);
+diff --git a/HaikuDataDeviceManager.cpp b/HaikuDataDeviceManager.cpp
+index 654bee4..de096f9 100644
+--- a/HaikuDataDeviceManager.cpp
++++ b/HaikuDataDeviceManager.cpp
+@@ -209,7 +209,7 @@ static void SanitizeFileName(BString &name)
+ }
+ 
+ 
+-//#pragma mark - HaikuDataSource
++
+ 
+ void HaikuDataSource::ConvertToHaikuMessage(BMessage &dstMsg, const BMessage &srcMsg)
+ {
+@@ -467,7 +467,7 @@ void HaikuDataSource::HandleSetActions(uint32_t dndActions)
+ }
+ 
+ 
+-//#pragma mark - HaikuDataOffer
++
+ 
+ HaikuDataOffer *HaikuDataOffer::Create(HaikuDataDevice *dataDevice, const BMessage &data)
+ {
+@@ -728,7 +728,7 @@ void HaikuDataOffer::HandleSetActions(uint32_t dnd_actions, uint32_t preferred_a
+ }
+ 
+ 
+-//#pragma mark - HaikuDataDevice
++
+ 
+ HaikuDataDevice::ClipboardWatcher::ClipboardWatcher(HaikuDataDevice *device)
+ 	: BHandler("clipboardWatcher"), fDevice(device)
+@@ -933,7 +933,7 @@ void HaikuDataDevice::HandleSetSelection(struct wl_resource *_source, uint32_t s
+ }
+ 
+ 
+-//#pragma mark - HaikuDataDeviceManager
++
+ 
+ class HaikuDataDeviceManager: public WlDataDeviceManager {
+ private:
+diff --git a/HaikuOutput.cpp b/HaikuOutput.cpp
+index 89b1375..bc0b5bd 100644
+--- a/HaikuOutput.cpp
++++ b/HaikuOutput.cpp
+@@ -1,3 +1,5 @@
++#include "HaikuScale.h"
++#include "FractionalTrace.h"
+ #include "HaikuOutput.h"
+ #include <Screen.h>
+ #include <AutoDeleter.h>
+@@ -39,7 +41,16 @@ void HaikuOutputGlobal::Bind(struct wl_client *wl_client, uint32_t version, uint
+ 	int32_t width = (int32_t)screen.Frame().Width() + 1;
+ 	int32_t height = (int32_t)screen.Frame().Height() + 1;
+ 	output->SendGeometry(0, 0, (float)width * 0.3528, (float)height * 0.3528, WlOutput::subpixelUnknown, "Unknown make", "Unknown model", WlOutput::transformNormal);
+-	output->SendMode(WlOutput::modeCurrent | WlOutput::modePreferred, width, height, 60000);
+-	output->SendScale(1);
+-	output->SendDone();
++
++
++
++	int32 density = (int32)std::ceil(DesktopScale());
++	int32 logicalWidth = LogicalCount(width - 1);
++	int32 logicalHeight = LogicalCount(height - 1);
++	output->SendMode(WlOutput::modeCurrent | WlOutput::modePreferred,
++		logicalWidth * density, logicalHeight * density, 60000);
++	if (version >= 2) output->SendScale(density);
++	FractionalTrace("global.output native=%dx%d logical=%dx%d desktop_scale=%.4f buffer_density=%d",
++		width, height, logicalWidth, logicalHeight, DesktopScale(), density);
++	if (version >= 2) output->SendDone();
+ }
+diff --git a/HaikuScale.h b/HaikuScale.h
+new file mode 100644
+index 0000000..ba72029
+--- /dev/null
++++ b/HaikuScale.h
+@@ -0,0 +1,50 @@
++#pragma once
++
++#include <Font.h>
++#include <Rect.h>
++#include <Size.h>
++#include <cmath>
++
++
++
++inline float DesktopScale()
++{
++	static const float scale = [] {
++
++
++
++		constexpr float kNativeUiCorrection = 0.84f;
++		float value = be_plain_font->Size() / 12.0f * kNativeUiCorrection;
++		return std::isfinite(value) && value > 1.0f ? value : 1.0f;
++	}();
++	return scale;
++}
++
++inline BPoint ToNative(BPoint p) { return BPoint(p.x * DesktopScale(), p.y * DesktopScale()); }
++inline BPoint ToLogical(BPoint p) { return BPoint(p.x / DesktopScale(), p.y / DesktopScale()); }
++
++
++inline BRect NativeRect(BRect r)
++{
++	float s = DesktopScale();
++	return BRect(std::round(r.left * s), std::round(r.top * s),
++		std::round((r.right + 1) * s) - 1,
++		std::round((r.bottom + 1) * s) - 1);
++}
++
++inline BRect LogicalRect(BRect r)
++{
++	float s = DesktopScale();
++	return BRect(r.left / s, r.top / s,
++		(r.right + 1) / s - 1, (r.bottom + 1) / s - 1);
++}
++
++inline float NativeExtent(float extent)
++{
++	return std::round((extent + 1) * DesktopScale()) - 1;
++}
++
++inline int32 LogicalCount(float nativeExtent)
++{
++	return (int32)std::round((nativeExtent + 1) / DesktopScale());
++}
+diff --git a/HaikuSeat.cpp b/HaikuSeat.cpp
+index 1377abe..1439a08 100644
+--- a/HaikuSeat.cpp
++++ b/HaikuSeat.cpp
+@@ -1,9 +1,11 @@
++#include "HaikuScale.h"
+ #include "HaikuSeat.h"
+ #include "HaikuCompositor.h"
+ #include "HaikuXdgSurface.h"
+ #include "HaikuXdgToplevel.h"
+ #include "HaikuDataDeviceManager.h"
+ #include "WaylandKeycodes.h"
++#include "FractionalTrace.h"
+ #include "XkbKeymap.h"
+ #include <SupportDefs.h>
+ #include <InterfaceDefs.h>
+@@ -139,7 +141,7 @@ uint32_t FromHaikuKeyCode(uint32 haikuKey)
+ 		case 0x6b: wlKey = KEY_RO; break;
+ 
+ 		default:
+-			//fprintf(stderr, "[!] unknown key: %#x\n", haikuKey);
++
+ 			wlKey = 0;
+ 	}
+ 	return wlKey;
+@@ -204,7 +206,7 @@ void SurfaceCursorHook::HandleCommit()
+ }
+ 
+ 
+-//#pragma mark - HaikuPointer
++
+ 
+ HaikuPointer::~HaikuPointer()
+ {
+@@ -229,7 +231,7 @@ HaikuKeyboard::~HaikuKeyboard()
+ }
+ 
+ 
+-//#pragma mark - HaikuSeat
++
+ 
+ HaikuSeatGlobal *HaikuSeatGlobal::Create(struct wl_display *display)
+ {
+@@ -298,9 +300,11 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
+ 		} else if (msg.FindPoint("be:view_where", &where) < B_OK) where = B_ORIGIN;
+ 		switch (fTrack.id) {
+ 		case trackClient:
++			FractionalTrace("pointer.enter surface=%p haiku=%.3f,%.3f wayland=%.3f,%.3f",
++				surface, where.x, where.y, ToLogical(where).x, ToLogical(where).y);
+ 			for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
+ 				if (pointer->Client() != surface->Client()) continue;
+-				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
++				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y));
+ 				pointer->SendFrame();
+ 			}
+ 			break;
+@@ -310,7 +314,7 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
+ 				msg.FindMessage("be:drag_message", &data);
+ 				HaikuDataOffer *dataOffer = HaikuDataOffer::Create(fDataDevice, data);
+ 				if (dataOffer != NULL) {
+-					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y), dataOffer->ToResource());
++					fDataDevice->SendEnter(NextSerial(), fPointerFocus->ToResource(), wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y), dataOffer->ToResource());
+ 				}
+ 			}
+ 			break;
+@@ -505,7 +509,7 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 			if (oldBtns == 0 && btns != 0) {
+ 				fTrack.captured = true;
+ 				fTrack.origin = where;
+-				AppKitPtrs::LockedPtr(surface->View())->SetMouseEventMask(B_POINTER_EVENTS);
++				AppKitPtrs::LockedPtr(surface->View())->SetMouseEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
+ 			}
+ 			fOldMouseBtns = btns;
+ 			switch (fTrack.id) {
+@@ -578,19 +582,30 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 			uint32 btns;
+ 			msg->FindInt64("when", &when);
+ 			msg->FindPoint("be:view_where", &where);
++
++
++
++			if (fHaveLastMotion && fLastMotionSurface == surface
++				&& fLastMotionWhere == where)
++				return true;
++			fLastMotionSurface = surface;
++			fLastMotionWhere = where;
++			fHaveLastMotion = true;
+ 			switch (fTrack.id) {
+ 				case trackNone:
+ 				case trackClient: {
++					FractionalTrace("pointer.motion surface=%p haiku=%.3f,%.3f wayland=%.3f,%.3f",
++						surface, where.x, where.y, ToLogical(where).x, ToLogical(where).y);
+ 					for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
+ 						if (pointer->Client() != fPointerFocus->Client()) continue;
+-						pointer->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
++						pointer->SendMotion(when / 1000, wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y));
+ 						pointer->SendFrame();
+ 					}
+ 					break;
+ 				}
+ 				case trackDrag: {
+ 					if (fDataDevice != NULL)
+-						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
++						fDataDevice->SendMotion(when / 1000, wl_fixed_from_double(ToLogical(where).x), wl_fixed_from_double(ToLogical(where).y));
+ 					break;
+ 				}
+ 				case trackMove: {
+@@ -613,9 +628,9 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 								.data = &arrayData
+ 							};
+ 
+-							xdgSurface->Toplevel()->SendConfigure(fTrack.wndWidth - (where.x - fTrack.origin.x), fTrack.wndHeight - (where.y - fTrack.origin.y), &array);
+-							fTrack.wndWidth -= where.x - fTrack.origin.x;
+-							fTrack.wndHeight -= where.y - fTrack.origin.y;
++							xdgSurface->Toplevel()->SendConfigure(fTrack.wndWidth - ((where.x - fTrack.origin.x) / DesktopScale()), fTrack.wndHeight - ((where.y - fTrack.origin.y) / DesktopScale()), &array);
++							fTrack.wndWidth -= (where.x - fTrack.origin.x) / DesktopScale();
++							fTrack.wndHeight -= (where.y - fTrack.origin.y) / DesktopScale();
+ 							xdgSurface->SendConfigure(xdgSurface->NextSerial());
+ 							break;
+ 						}
+@@ -630,8 +645,8 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 							xdgSurface->Toplevel()->MaxSize(maxWidth, maxHeight);
+ 							if (maxWidth == 0) maxWidth = INT32_MAX;
+ 							if (maxHeight == 0) maxHeight = INT32_MAX;
+-							int32_t newWidth = std::min<int32_t>(std::max<int32_t>(fTrack.wndWidth + (where.x - fTrack.origin.x), minWidth), maxWidth);
+-							int32_t newHeight = std::min<int32_t>(std::max<int32_t>(fTrack.wndHeight + (where.y - fTrack.origin.y), minHeight), maxHeight);
++							int32_t newWidth = std::min<int32_t>(std::max<int32_t>(fTrack.wndWidth + ((where.x - fTrack.origin.x) / DesktopScale()), minWidth), maxWidth);
++							int32_t newHeight = std::min<int32_t>(std::max<int32_t>(fTrack.wndHeight + ((where.y - fTrack.origin.y) / DesktopScale()), minHeight), maxHeight);
+ 
+ 							uint32_t arrayData[] = {XdgToplevel::stateResizing};
+ 							struct wl_array array {
+diff --git a/HaikuSeat.h b/HaikuSeat.h
+index 264d1b3..fd25fc9 100644
+--- a/HaikuSeat.h
++++ b/HaikuSeat.h
+@@ -83,6 +83,9 @@ private:
+ 	HaikuSurface *fPointerFocus{};
+ 	HaikuSurface *fKeyboardFocus{};
+ 	uint32 fOldMouseBtns{};
++	HaikuSurface *fLastMotionSurface{};
++	BPoint fLastMotionWhere{B_ORIGIN};
++	bool fHaveLastMotion = false;
+ 	Track fTrack;
+ 
+ 	uint32_t NextSerial();
+diff --git a/HaikuServerDecoration.cpp b/HaikuServerDecoration.cpp
+index 879154c..4694396 100644
+--- a/HaikuServerDecoration.cpp
++++ b/HaikuServerDecoration.cpp
+@@ -13,7 +13,7 @@ enum {
+ };
+ 
+ 
+-//#pragma mark - HaikuServerDecorationManager
++
+ 
+ class HaikuServerDecorationManager: public OrgKdeKwinServerDecorationManager {
+ protected:
+@@ -53,7 +53,7 @@ void HaikuServerDecorationManager::HandleCreate(uint32_t id, struct wl_resource
+ }
+ 
+ 
+-//#pragma mark - HaikuServerDecoration
++
+ 
+ HaikuServerDecoration *HaikuServerDecoration::Create(HaikuServerDecorationManager *manager, struct HaikuSurface *surface, uint32_t id)
+ {
+diff --git a/HaikuSubcompositor.cpp b/HaikuSubcompositor.cpp
+index 01244e0..c06d07d 100644
+--- a/HaikuSubcompositor.cpp
++++ b/HaikuSubcompositor.cpp
+@@ -13,7 +13,7 @@ extern const struct wl_interface wl_subcompositor_interface;
+ #define SUBCOMPOSITOR_VERSION 1
+ 
+ 
+-//#pragma mark - HaikuSubcompositor
++
+ 
+ class HaikuSubcompositor: public WlSubcompositor {
+ protected:
+@@ -51,7 +51,7 @@ void HaikuSubcompositor::HandleGetSubsurface(uint32_t id, struct wl_resource *su
+ }
+ 
+ 
+-//#pragma mark - HaikuSubsurface
++
+ 
+ HaikuSubsurface *HaikuSubsurface::Create(struct wl_client *client, uint32_t version, uint32_t id, struct wl_resource *surface, struct wl_resource *parent)
+ {
+diff --git a/HaikuTextInput.cpp b/HaikuTextInput.cpp
+index cd62fbd..4b44bcb 100644
+--- a/HaikuTextInput.cpp
++++ b/HaikuTextInput.cpp
+@@ -1,3 +1,4 @@
++#include "HaikuScale.h"
+ #include "HaikuTextInput.h"
+ #include <text-input-unstable-v3-protocol.h>
+ 
+@@ -18,7 +19,7 @@ enum {
+ };
+ 
+ 
+-// #pragma mark - HaikuTextInputGlobal
++
+ 
+ HaikuTextInputGlobal *HaikuTextInputGlobal::Create(struct wl_display *display, HaikuSeatGlobal *seat)
+ {
+@@ -36,7 +37,7 @@ HaikuTextInputGlobal::~HaikuTextInputGlobal()
+ 
+ void HaikuTextInputGlobal::Bind(struct wl_client *wl_client, uint32_t version, uint32_t id)
+ {
+-	//printf("HaikuTextInputGlobal::Bind()\n");
++
+ 	HaikuTextInputManager *res = new(std::nothrow) HaikuTextInputManager(this);
+ 	if (res == NULL) {
+ 		wl_client_post_no_memory(wl_client);
+@@ -87,8 +88,8 @@ void HaikuTextInputGlobal::Leave(HaikuSurface *surface)
+ 
+ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ {
+-	//printf("HaikuTextInputGlobal::MessageReceived()\n");
+-	
++
++
+ 	if (fSeat->fKeyboardFocus != surface) {
+ 		return false;
+ 	}
+@@ -100,7 +101,7 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 			}
+ 			switch (opcode) {
+ 				case B_INPUT_METHOD_STARTED: {
+-					//printf("B_INPUT_METHOD_STARTED\n");
++
+ 					if (msg->FindMessenger("be:reply_to", &fImReplyMsgr) < B_OK) {
+ 						Clear();
+ 						return true;
+@@ -110,7 +111,7 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 					return true;
+ 				}
+ 				case B_INPUT_METHOD_STOPPED: {
+-					//printf("B_INPUT_METHOD_STOPPED\n");
++
+ 
+ 					for (HaikuTextInput *textInput = fTextInputIfaces.First(); textInput != NULL; textInput = fTextInputIfaces.GetNext(textInput)) {
+ 						if (textInput->Client() != fSeat->fKeyboardFocus->Client()) continue;
+@@ -120,8 +121,8 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 					return true;
+ 				}
+ 				case B_INPUT_METHOD_CHANGED: {
+-					//printf("B_INPUT_METHOD_CHANGED\n");
+-					
++
++
+ 					if (msg->FindString("be:string", &fString) < B_OK) {
+ 						fString = "";
+ 					}
+@@ -135,9 +136,9 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 					if (msg->FindBool("be:confirmed", &fConfirmed) < B_OK) {
+ 						fConfirmed = false;
+ 					}
+-					//printf("  string: \"%s\"\n", fString.String());
+-					//printf("  selection: %" B_PRId32 ", %" B_PRId32 "\n", fSelectionBeg, fSelectionEnd);
+-					
++
++
++
+ 					for (HaikuTextInput *textInput = fTextInputIfaces.First(); textInput != NULL; textInput = fTextInputIfaces.GetNext(textInput)) {
+ 						if (textInput->Client() != fSeat->fKeyboardFocus->Client()) continue;
+ 						SendState(textInput);
+@@ -149,24 +150,24 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ 					return true;
+ 				};
+ 				case B_INPUT_METHOD_LOCATION_REQUEST: {
+-					//printf("B_INPUT_METHOD_LOCATION_REQUEST\n");
++
+ 					if (!fImReplyMsgr.IsValid()) {
+ 						return true;
+ 					}
+ 					int32 charCount = UTF8CountChars(fString.String(), fString.Length());
+-					BPoint location = fCursorRect.LeftTop();
+-					float height = fCursorRect.Height();
++					BPoint location = ToNative(fCursorRect.LeftTop());
++					float height = NativeExtent(fCursorRect.Height());
+ 					AppKitPtrs::LockedPtr(surface->View())->ConvertToScreen(&location);
+-		
++
+ 					BMessage reply(B_INPUT_METHOD_EVENT);
+ 					reply.AddInt32("be:opcode", B_INPUT_METHOD_LOCATION_REQUEST);
+ 					for (int32 i = 0; i < charCount; i++) {
+ 						reply.AddPoint("be:location_reply", location);
+ 						reply.AddFloat("be:height_reply", height);
+ 					}
+-		
++
+ 					fImReplyMsgr.SendMessage(&reply);
+-					
++
+ 					return true;
+ 				}
+ 			}
+@@ -177,7 +178,7 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
+ }
+ 
+ 
+-// #pragma mark - HaikuTextInputManager
++
+ 
+ void HaikuTextInputManager::HandleGetTextInput(uint32_t id, struct wl_resource *seat)
+ {
+@@ -192,7 +193,7 @@ void HaikuTextInputManager::HandleGetTextInput(uint32_t id, struct wl_resource *
+ }
+ 
+ 
+-// #pragma mark - HaikuTextInput
++
+ 
+ HaikuTextInput::HaikuTextInput(HaikuTextInputGlobal *global, HaikuSeatGlobal *seat):
+ 	fGlobal(global),
+@@ -208,12 +209,12 @@ HaikuTextInput::~HaikuTextInput()
+ 
+ void HaikuTextInput::HandleEnable()
+ {
+-	//printf("HaikuTextInput::HandleEnable()\n");
++
+ }
+ 
+ void HaikuTextInput::HandleDisable()
+ {
+-	//printf("HaikuTextInput::HandleDisable()\n");
++
+ 	if (fGlobal->fActive) {
+ 		if (fGlobal->fImReplyMsgr.IsValid()) {
+ 			BMessage reply(B_INPUT_METHOD_EVENT);
+@@ -226,12 +227,12 @@ void HaikuTextInput::HandleDisable()
+ 
+ void HaikuTextInput::HandleSetSurroundingText(const char *text, int32_t cursor, int32_t anchor)
+ {
+-	//printf("HaikuTextInput::HandleSetSurroundingText(\"%s\", %" PRId32 ", %" PRId32 ")\n", text, cursor, anchor);
++
+ }
+ 
+ void HaikuTextInput::HandleSetTextChangeCause(uint32_t cause)
+ {
+-	//printf("HaikuTextInput::HandleSetTextChangeCause(%" PRId32 ")\n", cause);
++
+ }
+ 
+ void HaikuTextInput::HandleSetContentType(uint32_t hint, uint32_t purpose)
+@@ -240,13 +241,13 @@ void HaikuTextInput::HandleSetContentType(uint32_t hint, uint32_t purpose)
+ 
+ void HaikuTextInput::HandleSetCursorRectangle(int32_t x, int32_t y, int32_t width, int32_t height)
+ {
+-	//printf("HaikuTextInput::HandleSetCursorRectangle(%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ")\n", x, y, width, height);
++
+ 	fGlobal->fCursorRect = BRect(x, y, x + width - 1, y + height - 1);
+ }
+ 
+ void HaikuTextInput::HandleCommit()
+ {
+-	//printf("HaikuTextInput::HandleCommit()\n");
++
+ 	fGlobal->fSerial++;
+ 
+ 	fGlobal->SendState(this);
+diff --git a/HaikuTextInput.h b/HaikuTextInput.h
+index c0c84fa..90a26af 100644
+--- a/HaikuTextInput.h
++++ b/HaikuTextInput.h
+@@ -55,7 +55,7 @@ private:
+ 	bool fConfirmed {};
+ 
+ 	BRect fCursorRect;
+-	
++
+ 	HaikuTextInputGlobal(HaikuSeatGlobal *seat): fSeat(seat) {}
+ 
+ 	void Clear();
+diff --git a/HaikuViewporter.cpp b/HaikuViewporter.cpp
+index 9092b27..08523d5 100644
+--- a/HaikuViewporter.cpp
++++ b/HaikuViewporter.cpp
+@@ -1,5 +1,6 @@
+ #include "HaikuViewporter.h"
+ #include "Viewporter.h"
++#include "FractionalTrace.h"
+ #include <AutoDeleter.h>
+ 
+ extern const struct wl_interface wp_viewporter_interface;
+@@ -65,21 +66,28 @@ void HaikuViewporter::HandleGetViewport(uint32_t id, struct wl_resource *surface
+ 		return;
+ 	}
+ 	viewport->fSurface = HaikuSurface::FromResource(surface);
++	FractionalTrace("viewport.create surface=%p viewport=%p", viewport->fSurface, viewport);
+ }
+ 
+ 
+ HaikuViewport::~HaikuViewport()
+ {
++	FractionalTrace("viewport.destroy surface=%p viewport=%p", fSurface, this);
+ 	fSurface->SetViewportSrc(-1, -1, -1, -1);
+ 	fSurface->SetViewportDst(-1, -1);
+ }
+ 
+ void HaikuViewport::HandleSetSource(wl_fixed_t x, wl_fixed_t y, wl_fixed_t width, wl_fixed_t height)
+ {
++	FractionalTrace("viewport.set_source surface=%p x=%.3f y=%.3f width=%.3f height=%.3f",
++		fSurface, wl_fixed_to_double(x), wl_fixed_to_double(y),
++		wl_fixed_to_double(width), wl_fixed_to_double(height));
+ 	fSurface->SetViewportSrc(wl_fixed_to_double(x), wl_fixed_to_double(y), wl_fixed_to_double(width), wl_fixed_to_double(height));
+ }
+ 
+ void HaikuViewport::HandleSetDestination(int32_t width, int32_t height)
+ {
++	FractionalTrace("viewport.set_destination surface=%p width=%d height=%d",
++		fSurface, width, height);
+ 	fSurface->SetViewportDst(width, height);
+ }
+diff --git a/HaikuXdgPopup.cpp b/HaikuXdgPopup.cpp
+index 90336d2..c49e982 100644
+--- a/HaikuXdgPopup.cpp
++++ b/HaikuXdgPopup.cpp
+@@ -2,6 +2,7 @@
+ #include "HaikuXdgSurface.h"
+ #include "HaikuXdgPositioner.h"
+ #include "WaylandEnv.h"
++#include "FractionalTrace.h"
+ 
+ #include "AppKitPtrs.h"
+ 
+@@ -28,7 +29,7 @@ WaylandPopupWindow::WaylandPopupWindow(HaikuXdgPopup *popup, BRect frame, const
+ 	BWindow(frame, title, look, feel, flags, workspace),
+ 	fPopup(popup)
+ {
+-	SetPulseRate(1000000 / 60); // 60 fps
++	SetPulseRate(1000000 / 60);
+ }
+ 
+ bool WaylandPopupWindow::QuitRequested()
+@@ -44,7 +45,7 @@ void WaylandPopupWindow::DispatchMessage(BMessage *msg, BHandler *target)
+ 	switch (msg->what) {
+ 	case B_KEY_DOWN:
+ 	case B_UNMAPPED_KEY_DOWN:
+-		// Do not use built-in shortcut handling.
++
+ 		target->MessageReceived(msg);
+ 		return;
+ 	}
+@@ -60,6 +61,13 @@ void HaikuXdgPopup::UpdatePosition(struct wl_resource *_positioner)
+ 	fParent->ConvertFromScreen(workArea);
+ 
+ 	positioner->GetPosition(fPosition, workArea);
++	const auto& state = positioner->GetState();
++	FractionalTrace("xdg.popup_position surface=%p parent=%p size=%dx%d"
++		" anchor_rect=%d,%d %dx%d offset=%d,%d result=%.0f,%.0f %.0fx%.0f",
++		fXdgSurface->Surface(), fParent != NULL ? fParent->Surface() : NULL,
++		state.size.width, state.size.height, state.anchorRect.x, state.anchorRect.y,
++		state.anchorRect.width, state.anchorRect.height, state.offset.x, state.offset.y,
++		fPosition.left, fPosition.top, fPosition.Width() + 1, fPosition.Height() + 1);
+ }
+ 
+ HaikuXdgPopup *HaikuXdgPopup::Create(HaikuXdgSurface *xdgSurface, uint32_t id, struct wl_resource *_parent, struct wl_resource *_positioner)
+@@ -94,8 +102,8 @@ HaikuXdgPopup::~HaikuXdgPopup()
+ 	if (fWindow != NULL) {
+ 		fWindow->fPopup = NULL;
+ 		fWindow->PostMessage(B_QUIT_REQUESTED);
+-		//fWindow->Lock();
+-		//fWindow->Quit();
++
++
+ 		fWindow = NULL;
+ 	}
+ }
+diff --git a/HaikuXdgPositioner.cpp b/HaikuXdgPositioner.cpp
+index 9e3d6e9..8e39568 100644
+--- a/HaikuXdgPositioner.cpp
++++ b/HaikuXdgPositioner.cpp
+@@ -258,7 +258,7 @@ static void UnconstrainPosition(const HaikuXdgPositioner::State &state, BRect &p
+ }
+ 
+ 
+-//#pragma mark - HaikuXdgPositioner
++
+ 
+ HaikuXdgPositioner *HaikuXdgPositioner::Create(HaikuXdgWmBase *client, uint32_t id)
+ {
+diff --git a/HaikuXdgPositioner.h b/HaikuXdgPositioner.h
+index ccf713e..34fff9e 100644
+--- a/HaikuXdgPositioner.h
++++ b/HaikuXdgPositioner.h
+@@ -21,7 +21,7 @@ public:
+ 		};
+ 		uint32_t val;
+ 	};
+-	
++
+ 	struct State {
+ 		Valid valid{};
+ 		struct {
+diff --git a/HaikuXdgShell.cpp b/HaikuXdgShell.cpp
+index bdf16e6..cf12f59 100644
+--- a/HaikuXdgShell.cpp
++++ b/HaikuXdgShell.cpp
+@@ -14,7 +14,7 @@
+ static void Assert(bool cond) {if (!cond) abort();}
+ 
+ 
+-//#pragma mark - xdg_base
++
+ 
+ 
+ HaikuXdgShell *HaikuXdgShell::Create(struct wl_display *display)
+@@ -42,7 +42,7 @@ void HaikuXdgShell::Bind(struct wl_client *wl_client, uint32_t version, uint32_t
+ 
+ HaikuXdgWmBase::~HaikuXdgWmBase()
+ {
+-	// TODO: delete owned surfaces
++
+ 
+ 	fShell->fClients.Remove(this);
+ }
+diff --git a/HaikuXdgSurface.cpp b/HaikuXdgSurface.cpp
+index fc0383b..9dc58f2 100644
+--- a/HaikuXdgSurface.cpp
++++ b/HaikuXdgSurface.cpp
+@@ -1,9 +1,11 @@
++#include "HaikuScale.h"
+ #include "HaikuXdgSurface.h"
+ #include "HaikuXdgShell.h"
+ #include "HaikuXdgToplevel.h"
+ #include "HaikuXdgPopup.h"
+ #include "HaikuCompositor.h"
+ #include "HaikuServerDecoration.h"
++#include "FractionalTrace.h"
+ #include <wayland-server-core.h>
+ #include <wayland-server-protocol.h>
+ #include <xdg-shell-protocol.h>
+@@ -32,15 +34,20 @@ XdgSurfaceHook::XdgSurfaceHook(HaikuXdgSurface *xdgSurface):
+ 
+ void XdgSurfaceHook::HandleCommit()
+ {
+-	// TODO: move to HaikuXdgToplevel/HaikuXdgPopup
++	FractionalTrace("xdg.commit surface=%p role=%s geometry_pending=%d,%d %dx%d valid=%d ack=%u",
++		fXdgSurface->Surface(), fXdgSurface->fPopup != NULL ? "popup" : "toplevel",
++		fXdgSurface->fPendingGeometry.x, fXdgSurface->fPendingGeometry.y,
++		fXdgSurface->fPendingGeometry.width, fXdgSurface->fPendingGeometry.height,
++		fXdgSurface->fPendingGeometry.valid, fXdgSurface->fAckSerial);
++
+ 	if (fXdgSurface->HasServerDecoration()) {
+-		// toplevel: window size limits
++
+ 		if (fXdgSurface->fToplevel != NULL && fXdgSurface->fToplevel->fSizeLimitsDirty) {
+ 			fXdgSurface->Window()->SetSizeLimits(
+-				fXdgSurface->fToplevel->fMinWidth  == 0 ? 0     : fXdgSurface->fToplevel->fMinWidth  - 1,
+-				fXdgSurface->fToplevel->fMaxWidth  == 0 ? 32768 : fXdgSurface->fToplevel->fMaxWidth  - 1,
+-				fXdgSurface->fToplevel->fMinHeight == 0 ? 0     : fXdgSurface->fToplevel->fMinHeight - 1,
+-				fXdgSurface->fToplevel->fMaxHeight == 0 ? 32768 : fXdgSurface->fToplevel->fMaxHeight - 1
++				fXdgSurface->fToplevel->fMinWidth  == 0 ? 0     : NativeExtent(fXdgSurface->fToplevel->fMinWidth - 1),
++				fXdgSurface->fToplevel->fMaxWidth  == 0 ? 32768 : NativeExtent(fXdgSurface->fToplevel->fMaxWidth - 1),
++				fXdgSurface->fToplevel->fMinHeight == 0 ? 0     : NativeExtent(fXdgSurface->fToplevel->fMinHeight - 1),
++				fXdgSurface->fToplevel->fMaxHeight == 0 ? 32768 : NativeExtent(fXdgSurface->fToplevel->fMaxHeight - 1)
+ 			);
+ 			if (
+ 				fXdgSurface->fToplevel->fMinWidth != 0 && fXdgSurface->fToplevel->fMinWidth == fXdgSurface->fToplevel->fMaxWidth &&
+@@ -59,7 +66,7 @@ void XdgSurfaceHook::HandleCommit()
+ 			BSize newSize = oldSize;
+ 
+ 			if (fXdgSurface->Surface()->View() != NULL)
+-				AppKitPtrs::LockedPtr(fXdgSurface->Surface()->View())->MoveTo(-fXdgSurface->fPendingGeometry.x, -fXdgSurface->fPendingGeometry.y);
++				AppKitPtrs::LockedPtr(fXdgSurface->Surface()->View())->MoveTo(ToNative(BPoint(-fXdgSurface->fPendingGeometry.x, -fXdgSurface->fPendingGeometry.y)));
+ 			newSize.width = fXdgSurface->fPendingGeometry.width - 1;
+ 			newSize.height = fXdgSurface->fPendingGeometry.height - 1;
+ 
+@@ -68,7 +75,7 @@ void XdgSurfaceHook::HandleCommit()
+ 				fXdgSurface->fToplevel->fWidth = (int32_t)newSize.width + 1;
+ 				fXdgSurface->fToplevel->fHeight = (int32_t)newSize.height + 1;
+ 
+-				fXdgSurface->Window()->ResizeTo(newSize.width, newSize.height);
++				fXdgSurface->Window()->ResizeTo(NativeExtent(newSize.width), NativeExtent(newSize.height));
+ 			}
+ 		}
+ 	} else {
+@@ -77,13 +84,14 @@ void XdgSurfaceHook::HandleCommit()
+ 			fXdgSurface->fPendingGeometry.y != fXdgSurface->fGeometry.y
+ 		) {
+ 			fXdgSurface->Window()->MoveBy(
+-				fXdgSurface->fGeometry.x - fXdgSurface->fPendingGeometry.x,
+-				fXdgSurface->fGeometry.y - fXdgSurface->fPendingGeometry.y
++				(fXdgSurface->fGeometry.x - fXdgSurface->fPendingGeometry.x) * DesktopScale(),
++				(fXdgSurface->fGeometry.y - fXdgSurface->fPendingGeometry.y) * DesktopScale()
+ 			);
+ 		}
+ 		if (fXdgSurface->Surface()->Bitmap() != NULL) {
+ 			BSize oldSize = fXdgSurface->Window()->Size();
+-			BSize newSize = fXdgSurface->Surface()->Size();
++			BSize logicalSize = fXdgSurface->Surface()->Size();
++			BSize newSize(NativeExtent(logicalSize.width), NativeExtent(logicalSize.height));
+ 			if (oldSize != newSize) {
+ 				fXdgSurface->Window()->ResizeTo(newSize.width, newSize.height);
+ 			}
+@@ -91,7 +99,7 @@ void XdgSurfaceHook::HandleCommit()
+ 	}
+ 	fXdgSurface->fGeometry = fXdgSurface->fPendingGeometry;
+ 
+-	// initial window show
++
+ 	if (!fXdgSurface->fSurfaceInitalized && fXdgSurface->Surface()->Bitmap() != NULL) {
+ 		if (fXdgSurface->Surface()->ServerDecoration() != NULL) {
+ 			fXdgSurface->Window()->SetLook(fXdgSurface->Surface()->ServerDecoration()->Look());
+@@ -111,7 +119,7 @@ void XdgSurfaceHook::HandleCommit()
+ 		fXdgSurface->Window()->MoveTo(wndRect.left, wndRect.top);
+ 	}
+ 
+-	// initial configure
++
+ 	if (!fXdgSurface->fConfigureCalled) {
+ 		if (fXdgSurface->fToplevel != NULL) {
+ 			fXdgSurface->fToplevel->DoSendConfigure();
+@@ -126,7 +134,7 @@ void XdgSurfaceHook::HandleCommit()
+ }
+ 
+ 
+-//#pragma mark - HaikuXdgSurface
++
+ HaikuXdgSurface::~HaikuXdgSurface()
+ {
+ 	fSurface->SetHook(NULL);
+@@ -156,21 +164,24 @@ bool HaikuXdgSurface::HasServerDecoration()
+ void HaikuXdgSurface::ConvertFromScreen(BPoint &pt)
+ {
+ 	Window()->ConvertFromScreen(&pt);
+-	if (fGeometry.valid)
++	pt = ToLogical(pt);
++	if (fGeometry.valid && !HasServerDecoration())
+ 		pt -= BPoint(fGeometry.x, fGeometry.y);
+ }
+ 
+ void HaikuXdgSurface::ConvertToScreen(BPoint &pt)
+ {
+-	if (fGeometry.valid)
++	if (fGeometry.valid && !HasServerDecoration())
+ 		pt += BPoint(fGeometry.x, fGeometry.y);
+ 
++	pt = ToNative(pt);
+ 	Window()->ConvertToScreen(&pt);
+ }
+ 
+ void HaikuXdgSurface::ConvertFromScreen(BRect &rect)
+ {
+ 	Window()->ConvertFromScreen(&rect);
++	rect = LogicalRect(rect);
+ 	if (fGeometry.valid && !HasServerDecoration())
+ 		rect.OffsetBy(-fGeometry.x, -fGeometry.y);
+ }
+@@ -180,6 +191,7 @@ void HaikuXdgSurface::ConvertToScreen(BRect &rect)
+ 	if (fGeometry.valid && !HasServerDecoration())
+ 		rect.OffsetBy(fGeometry.x, fGeometry.y);
+ 
++	rect = NativeRect(rect);
+ 	Window()->ConvertToScreen(&rect);
+ }
+ 
+@@ -196,6 +208,8 @@ void HaikuXdgSurface::HandleGetPopup(uint32_t id, struct wl_resource *parent, st
+ 
+ void HaikuXdgSurface::HandleSetWindowGeometry(int32_t x, int32_t y, int32_t width, int32_t height)
+ {
++	FractionalTrace("xdg.set_window_geometry surface=%p x=%d y=%d width=%d height=%d",
++		Surface(), x, y, width, height);
+ 	fPendingGeometry = {
+ 		.valid = true,
+ 		.x = x,
+@@ -207,6 +221,7 @@ void HaikuXdgSurface::HandleSetWindowGeometry(int32_t x, int32_t y, int32_t widt
+ 
+ void HaikuXdgSurface::HandleAckConfigure(uint32_t serial)
+ {
++	FractionalTrace("xdg.ack_configure surface=%p serial=%u", Surface(), serial);
+ 	fAckSerial = serial;
+ 	fConfigurePending = false;
+ }
+diff --git a/HaikuXdgToplevel.cpp b/HaikuXdgToplevel.cpp
+index fc750e7..65d89bb 100644
+--- a/HaikuXdgToplevel.cpp
++++ b/HaikuXdgToplevel.cpp
+@@ -1,3 +1,4 @@
++#include "HaikuScale.h"
+ #include "HaikuXdgToplevel.h"
+ #include "HaikuXdgShell.h"
+ #include "HaikuXdgSurface.h"
+@@ -5,6 +6,7 @@
+ #include "HaikuSeat.h"
+ #include "HaikuServerDecoration.h"
+ #include "WaylandEnv.h"
++#include "FractionalTrace.h"
+ #include <wayland-server-core.h>
+ #include <wayland-server-protocol.h>
+ #include <xdg-shell-protocol.h>
+@@ -75,21 +77,23 @@ void WaylandWindow::WorkspacesChanged(uint32 oldWorkspace, uint32 newWorkspace)
+ 
+ void WaylandWindow::FrameResized(float newWidth, float newHeight)
+ {
++	FractionalTrace("haiku.frame_resized surface=%p native_width=%.1f native_height=%.1f",
++		fToplevel->XdgSurface()->Surface(), newWidth + 1, newHeight + 1);
+ 	WaylandEnv vlEnv(this);
+ 
+-	if (fToplevel->fSizeChanged) {
+-		fToplevel->fSizeChanged = false;
++
++	if (Bounds().Width() != newWidth || Bounds().Height() != newHeight)
+ 		return;
+-	}
++	fToplevel->fSizeChanged = false;
+ 
+ 	if(!fToplevel->XdgSurface()->HasServerDecoration())
+ 		return;
+ 
+-	if ((int32_t)newWidth + 1 == fToplevel->fWidth && (int32_t)newHeight + 1 == fToplevel->fHeight)
++	if (LogicalCount(newWidth) == fToplevel->fWidth && LogicalCount(newHeight) == fToplevel->fHeight)
+ 		return;
+ 
+-	fToplevel->fWidth = (int32_t)newWidth + 1;
+-	fToplevel->fHeight = (int32_t)newHeight + 1;
++	fToplevel->fWidth = LogicalCount(newWidth);
++	fToplevel->fHeight = LogicalCount(newHeight);
+ 
+ 	fToplevel->fResizeSerial = fToplevel->XdgSurface()->NextSerial();
+ 
+@@ -109,13 +113,13 @@ void WaylandWindow::DispatchMessage(BMessage *msg, BHandler *target)
+ 			uint32 modifiers;
+ 			if (msg->FindInt32("key", &key) == B_OK) {
+ 				msg->FindInt32("modifiers", (int32*)&modifiers);
+-				if (key == 0x0e) { // Print Screen
++				if (key == 0x0e) {
+ 					BWindow::DispatchMessage(msg, target);
+ 					return;
+ 				}
+ 				if (modifiers & B_CONTROL_KEY) {
+ 					switch (key) {
+-						case 0x26: // Command + Tab
++						case 0x26:
+ 							BWindow::DispatchMessage(msg, target);
+ 							return;
+ 					}
+@@ -145,7 +149,7 @@ void WaylandWindow::UpdateRefreshRate()
+ }
+ 
+ 
+-//#pragma mark - HaikuXdgToplevel
++
+ 
+ void HaikuXdgToplevel::DoSendConfigure()
+ {
+@@ -162,12 +166,14 @@ void HaikuXdgToplevel::DoSendConfigure()
+ 	if (fState.activated ) {*p++ = XdgToplevel::stateActivated;}
+ 
+ 	state.size = (uint8_t*)p - (uint8_t*)state.data;
++	FractionalTrace("xdg.toplevel_configure surface=%p width=%d height=%d states=0x%x",
++		XdgSurface()->Surface(), fWidth, fHeight, fState.val);
+ 	SendConfigure(fWidth, fHeight, &state);
+ }
+ 
+ void HaikuXdgToplevel::HandleSetParent(struct wl_resource *_parent)
+ {
+-	// TODO: update root window when parent window is closed
++
+ 	HaikuXdgToplevel *parent = HaikuXdgToplevel::FromResource(_parent);
+ 	if (parent == NULL) {
+ 		if (XdgSurface()->fRoot != XdgSurface()) {
+@@ -238,8 +244,8 @@ void HaikuXdgToplevel::HandleSetFullscreen(struct wl_resource *output)
+ 	BRect screenFrame = BScreen(fWindow).Frame();
+ 	fWindow->MoveTo(screenFrame.LeftTop());
+ 	fWindow->ResizeTo(screenFrame.Width(), screenFrame.Height());
+-	fWidth = (int32_t)screenFrame.Width() + 1;
+-	fHeight = (int32_t)screenFrame.Height() + 1;
++	fWidth = LogicalCount(screenFrame.Width());
++	fHeight = LogicalCount(screenFrame.Height());
+ 	DoSendConfigure();
+ 	XdgSurface()->SendConfigure(XdgSurface()->NextSerial());
+ }
+@@ -251,8 +257,8 @@ void HaikuXdgToplevel::HandleUnsetFullscreen()
+ 	fSizeChanged = true;
+ 	fWindow->MoveTo(fSavedPos.LeftTop());
+ 	fWindow->ResizeTo(fSavedPos.Width(), fSavedPos.Height());
+-	fWidth = (int32_t)fSavedPos.Width() + 1;
+-	fHeight = (int32_t)fSavedPos.Height() + 1;
++	fWidth = LogicalCount(fSavedPos.Width());
++	fHeight = LogicalCount(fSavedPos.Height());
+ 	DoSendConfigure();
+ 	XdgSurface()->SendConfigure(XdgSurface()->NextSerial());
+ }
+@@ -287,8 +293,8 @@ HaikuXdgToplevel::~HaikuXdgToplevel()
+ 	if (fWindow != NULL) {
+ 		fWindow->fToplevel = NULL;
+ 		fWindow->PostMessage(B_QUIT_REQUESTED);
+-		//fWindow->Lock();
+-		//fWindow->Quit();
++
++
+ 		fWindow = NULL;
+ 	}
+ }
+diff --git a/NOTICE.md b/NOTICE.md
+new file mode 100644
+index 0000000..08479d9
+--- /dev/null
++++ b/NOTICE.md
+@@ -0,0 +1,7 @@
++Original Wayland server: Copyright (c) 2022 X512 <https://github.com/X547>.
++
++util/DoublyLinkedList.h:
++Copyright 2005-2009, Ingo Weinhold, bonefish@users.sf.net.
++Copyright 2006-2009, Axel Dörfler, axeld@pinc-software.de.
++
++These components are distributed under the MIT license in License.md.
+diff --git a/README.md b/README.md
+index 82a21c8..dfabc6d 100644
+--- a/README.md
++++ b/README.md
+@@ -1,61 +1,36 @@
+ # Haiku Wayland HiDPI
+ 
+-This is a patched build of [X547/wayland-server](https://github.com/X547/wayland-server), an in-process Wayland server implemented on top of the Haiku API.
++An in-process Wayland server for Haiku with desktop-font-based HiDPI scaling, native cursors and popup composition. Tested with Firefox, Thunderbird, GIMP and Inkscape on Haiku x86_64.
+ 
+-The current source is based on upstream commit [`8ede02e`](https://github.com/X547/wayland-server/commit/8ede02e0e8801df4f23487c04b23e8f2c5569ad9).
++Based on [X512 (X547)'s wayland-server](https://github.com/X547/wayland-server). Original copyright is preserved under the [MIT license](License.md).
+ 
+-## Changes
+-
+-- Use Haiku's system cursor so Wayland applications follow the desktop cursor size on HiDPI displays.
+-- Composite surface trees through an offscreen bitmap.
+-- Reconstruct popup backgrounds from their parent Wayland surfaces, including nested popup chains.
+-- Prevent translucent popup shadows from accumulating during redraws.
+-- Preserve the upstream cursor flicker improvements.
+-
+-## Known limitation
+-
+-The part of a popup that extends outside its parent Wayland window uses Haiku's native fallback window background. Haiku does not currently provide per-pixel alpha-composited native windows, so the server cannot reproduce the desktop or another window behind that area without capturing the screen.
++## Install
+ 
+-## Build on Haiku
++Download a ZIP or HPKG from [v0.2.0](https://github.com/IzsakiRobi/Haiku-Wayland-HiDPI/releases/tag/v0.2.0).
+ 
+-Install the build dependencies:
++ZIP (backs up an existing library):
+ 
+ ```sh
+-pkgman install meson ninja wayland_devel wayland_protocols
++unzip haiway-hidpi-0.2.0-x86_64.zip
++sh haiway-hidpi-0.2.0/install.sh
+ ```
+ 
+-Configure and build:
++Or install the HPKG for the current user:
+ 
+ ```sh
+-meson setup build
+-ninja -C build
++pkgman install -H ./wayland_server_hidpi-0.2.0-1-x86_64.hpkg
+ ```
+ 
+-The resulting library is `build/wayland-server-inproc.so`.
+-
+-## Install
+-
+-Download the ZIP or HPKG from the [v0.1.0 release](https://github.com/IzsakiRobi/Haiku-Wayland-HiDPI/releases/tag/v0.1.0).
++Use one method. A library previously installed in `~/config/non-packaged/lib` overrides the HPKG; move that library aside before switching to HPKG. Restart Wayland applications after installation or changing Haiku font sizes. Use default application scaling settings; no Firefox `devPixelsPerPx` override is needed.
+ 
+-The ZIP contains a backup-aware installer:
+-
+-```sh
+-unzip wayland_server_hidpi-0.1.0-1-x86_64.zip
+-sh */install.sh
+-```
+-
+-Or install the package for the current user:
++## Build on Haiku
+ 
+ ```sh
+-pkgman install -H ./wayland_server_hidpi-0.1.0-1-x86_64.hpkg
++pkgman install meson ninja wayland_devel wayland_protocols
++meson setup build
++ninja -C build
+ ```
+ 
+-Both methods install under the current user's Haiku configuration and leave `/boot/system` unchanged. Restart running Wayland applications after installation.
+-
+-## Patch
+-
+-[`patches/haiku-wayland-hidpi.patch`](patches/haiku-wayland-hidpi.patch) contains the complete change against the upstream base commit.
+-
+-## License
++Output: `build/wayland-server-inproc.so`. The release ZIP installer also accepts a locally built library placed beside it.
+ 
+-MIT. See [License.md](License.md). The original project is copyright X512 and its contributors.
++Popup transparency outside the parent window remains limited by Haiku's native window composition.
+diff --git a/WaylandServer.cpp b/WaylandServer.cpp
+index 79fa495..693546f 100644
+--- a/WaylandServer.cpp
++++ b/WaylandServer.cpp
+@@ -68,7 +68,7 @@ void ServerHandler::MessageReceived(BMessage *msg)
+ 
+ class Application: public BApplication {
+ private:
+-	// TODO: support multiple clients
++
+ 	struct wl_client *fClient{};
+ 
+ public:
+@@ -110,7 +110,7 @@ void Application::MessageReceived(BMessage *msg)
+ }
+ 
+ 
+-//#pragma mark - entry points
++
+ 
+ _EXPORT uint32 wl_ips_version = 2;
+ 
+@@ -170,15 +170,15 @@ extern "C" _EXPORT int wl_ips_client_connected(void **clientOut, void *clientDis
+ 	*clientOut = client;
+ 
+ 	return 0;
+-/*
+-	wl_client_destroy(client);
+-	wl_display_destroy(display);
+-*/
++
++
++
++
+ }
+ 
+ extern "C" _EXPORT void wl_ips_client_disconnected(void *client)
+ {
+-	// TODO: implement
++
+ }
+ 
+ 
+diff --git a/WlGlobal.h b/WlGlobal.h
+index 4ee423d..6276950 100644
+--- a/WlGlobal.h
++++ b/WlGlobal.h
+@@ -5,7 +5,7 @@
+ class WlGlocal {
+ private:
+ 	struct wl_global *fGlobal = NULL;
+-	
++
+ 	static void Binder(struct wl_client *wl_client, void *data, uint32_t version, uint32_t id);
+ 
+ public:
+diff --git a/WlResource.h b/WlResource.h
+index 9ad0ec1..1482abb 100644
+--- a/WlResource.h
++++ b/WlResource.h
+@@ -1,22 +1,22 @@
+-#pragma once
+-#include <wayland-server-core.h>
+-
+-class WlResource {
+-private:
+-	struct wl_resource *fResource = NULL;
+-
+-	static void Destructor(struct wl_resource *resource);
+-	static int Dispatcher(const void *impl, void *resource, uint32_t opcode, const struct wl_message *message, union wl_argument *args);
+-
+-public:
+-	virtual ~WlResource() = default;
+-	bool Init(struct wl_client *wl_client, uint32_t version, uint32_t id);
+-	void Destroy();
+-	virtual const struct wl_interface *Interface() const = 0;
+-	virtual int Dispatch(uint32_t opcode, const struct wl_message *message, union wl_argument *args);
+-	static WlResource *FromResource(struct wl_resource *resource);
+-	struct wl_resource *ToResource() const {return fResource;}
+-	struct wl_client *Client() const {return wl_resource_get_client(fResource);}
+-	uint32_t Id() const {return wl_resource_get_id(fResource);}
+-	uint32_t Version() const {return wl_resource_get_version(fResource);}
+-};
++#pragma once
++#include <wayland-server-core.h>
++
++class WlResource {
++private:
++	struct wl_resource *fResource = NULL;
++
++	static void Destructor(struct wl_resource *resource);
++	static int Dispatcher(const void *impl, void *resource, uint32_t opcode, const struct wl_message *message, union wl_argument *args);
++
++public:
++	virtual ~WlResource() = default;
++	bool Init(struct wl_client *wl_client, uint32_t version, uint32_t id);
++	void Destroy();
++	virtual const struct wl_interface *Interface() const = 0;
++	virtual int Dispatch(uint32_t opcode, const struct wl_message *message, union wl_argument *args);
++	static WlResource *FromResource(struct wl_resource *resource);
++	struct wl_resource *ToResource() const {return fResource;}
++	struct wl_client *Client() const {return wl_resource_get_client(fResource);}
++	uint32_t Id() const {return wl_resource_get_id(fResource);}
++	uint32_t Version() const {return wl_resource_get_version(fResource);}
++};
+diff --git a/XkbKeymap.cpp b/XkbKeymap.cpp
+index f5dcccf..126c7c4 100644
+--- a/XkbKeymap.cpp
++++ b/XkbKeymap.cpp
+@@ -398,33 +398,33 @@ static void GenerateCompatibility(FILE *file)
+ 
+ static bool IsNumpadDigitKey(uint32 haikuKey)
+ {
+-	return (haikuKey >= 0x37 && haikuKey <= 0x39) ||  // KP7-KP9
+-		   (haikuKey >= 0x48 && haikuKey <= 0x4a) ||  // KP4-KP6
+-		   (haikuKey >= 0x58 && haikuKey <= 0x5a) ||  // KP1-KP3
+-		   (haikuKey == 0x64 || haikuKey == 0x65);    // KP0, KP_Decimal
++	return (haikuKey >= 0x37 && haikuKey <= 0x39) ||
++		   (haikuKey >= 0x48 && haikuKey <= 0x4a) ||
++		   (haikuKey >= 0x58 && haikuKey <= 0x5a) ||
++		   (haikuKey == 0x64 || haikuKey == 0x65);
+ }
+ 
+ static bool IsNumpadOperatorKey(uint32 haikuKey)
+ {
+-	return (haikuKey >= 0x23 && haikuKey <= 0x25) ||  // KP_Divide, KP_Multiply, KP_Subtract
+-		   (haikuKey == 0x3a) ||                       // KP_Add
+-		   (haikuKey == 0x5b);                         // KP_Enter
++	return (haikuKey >= 0x23 && haikuKey <= 0x25) ||
++		   (haikuKey == 0x3a) ||
++		   (haikuKey == 0x5b);
+ }
+ 
+ static void WriteNumpadDigitSymbol(FILE *file, uint32 haikuKey)
+ {
+ 	switch (haikuKey) {
+-		case 0x37: fprintf(file, "KP_Home, KP_7"); break;      // KP_7
+-		case 0x38: fprintf(file, "KP_Up, KP_8"); break;        // KP_8
+-		case 0x39: fprintf(file, "KP_Prior, KP_9"); break;     // KP_9
+-		case 0x48: fprintf(file, "KP_Left, KP_4"); break;      // KP_4
+-		case 0x49: fprintf(file, "KP_Begin, KP_5"); break;     // KP_5
+-		case 0x4a: fprintf(file, "KP_Right, KP_6"); break;     // KP_6
+-		case 0x58: fprintf(file, "KP_End, KP_1"); break;       // KP_1
+-		case 0x59: fprintf(file, "KP_Down, KP_2"); break;      // KP_2
+-		case 0x5a: fprintf(file, "KP_Next, KP_3"); break;      // KP_3
+-		case 0x64: fprintf(file, "KP_Insert, KP_0"); break;    // KP_0
+-		case 0x65: fprintf(file, "KP_Delete, KP_Decimal"); break; // KP_Decimal
++		case 0x37: fprintf(file, "KP_Home, KP_7"); break;
++		case 0x38: fprintf(file, "KP_Up, KP_8"); break;
++		case 0x39: fprintf(file, "KP_Prior, KP_9"); break;
++		case 0x48: fprintf(file, "KP_Left, KP_4"); break;
++		case 0x49: fprintf(file, "KP_Begin, KP_5"); break;
++		case 0x4a: fprintf(file, "KP_Right, KP_6"); break;
++		case 0x58: fprintf(file, "KP_End, KP_1"); break;
++		case 0x59: fprintf(file, "KP_Down, KP_2"); break;
++		case 0x5a: fprintf(file, "KP_Next, KP_3"); break;
++		case 0x64: fprintf(file, "KP_Insert, KP_0"); break;
++		case 0x65: fprintf(file, "KP_Delete, KP_Decimal"); break;
+ 		default: fprintf(file, "NoSymbol, NoSymbol"); break;
+ 	}
+ }
+@@ -432,11 +432,11 @@ static void WriteNumpadDigitSymbol(FILE *file, uint32 haikuKey)
+ static void WriteNumpadOperatorSymbol(FILE *file, uint32 haikuKey)
+ {
+ 	switch (haikuKey) {
+-		case 0x23: fprintf(file, "KP_Divide, KP_Divide, KP_Divide, KP_Divide"); break;     // KP_Divide
+-		case 0x24: fprintf(file, "KP_Multiply, KP_Multiply, KP_Multiply, KP_Multiply"); break; // KP_Multiply
+-		case 0x25: fprintf(file, "KP_Subtract, KP_Subtract, KP_Subtract, KP_Subtract"); break; // KP_Subtract
+-		case 0x3a: fprintf(file, "KP_Add, KP_Add, KP_Add, KP_Add"); break;                 // KP_Add
+-		case 0x5b: fprintf(file, "KP_Enter, KP_Enter, KP_Enter, KP_Enter"); break;         // KP_Enter
++		case 0x23: fprintf(file, "KP_Divide, KP_Divide, KP_Divide, KP_Divide"); break;
++		case 0x24: fprintf(file, "KP_Multiply, KP_Multiply, KP_Multiply, KP_Multiply"); break;
++		case 0x25: fprintf(file, "KP_Subtract, KP_Subtract, KP_Subtract, KP_Subtract"); break;
++		case 0x3a: fprintf(file, "KP_Add, KP_Add, KP_Add, KP_Add"); break;
++		case 0x5b: fprintf(file, "KP_Enter, KP_Enter, KP_Enter, KP_Enter"); break;
+ 		default: fprintf(file, "NoSymbol, NoSymbol, NoSymbol, NoSymbol"); break;
+ 	}
+ }
+@@ -449,7 +449,7 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
+ 
+ 	struct USLayout {
+ 		uint32 haikuKey;
+-		const char* symbols[4]; // Base, Shift, AltGr, AltGr+Shift
++		const char* symbols[4];
+ 	} usLayout[] = {
+ 		{0x27, {"q", "Q", "NoSymbol", "NoSymbol"}},
+ 		{0x28, {"w", "W", "NoSymbol", "NoSymbol"}},
+@@ -507,12 +507,12 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
+ 		} else {
+ 			fprintf(file, "\t\tkey <I%" B_PRIu32 "> {type = \"FOUR_LEVEL\", symbols[Group1] = [", wlKey + 8);
+ 
+-			// Group1 - current keymap
++
+ 			uint32 offsets[4] = {
+-				GetOffsetForLevel(map, haikuKey, 0), // normal
+-				GetOffsetForLevel(map, haikuKey, 1), // shift
+-				GetOffsetForLevel(map, haikuKey, 4), // option (AltGr)
+-				GetOffsetForLevel(map, haikuKey, 5)  // option+shift
++				GetOffsetForLevel(map, haikuKey, 0),
++				GetOffsetForLevel(map, haikuKey, 1),
++				GetOffsetForLevel(map, haikuKey, 4),
++				GetOffsetForLevel(map, haikuKey, 5)
+ 			};
+ 
+ 			int levels[4] = {0, 1, 4, 5};
+@@ -521,7 +521,7 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
+ 				if (level < 3) fprintf(file, ", ");
+ 			}
+ 
+-			// Group2 - latin keymap for hotkeys
++
+ 			fprintf(file, "], symbols[Group2] = [");
+ 
+ 			bool foundUS = false;
+@@ -550,10 +550,10 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
+ 	fprintf(file, "\t\tmodifier_map Shift {<I50>, <I62>};\n");
+ 	fprintf(file, "\t\tmodifier_map Lock {<I66>};\n");
+ 	fprintf(file, "\t\tmodifier_map Control {<I37>, <I105>};\n");
+-	fprintf(file, "\t\tmodifier_map Mod1 {<I64>};\n");            // Left Alt
+-	fprintf(file, "\t\tmodifier_map Mod2 {<I77>};\n");            // NumLock
+-	fprintf(file, "\t\tmodifier_map Mod4 {<I133>, <I134>};\n");   // Super (Command)
+-	fprintf(file, "\t\tmodifier_map Mod5 {<I108>};\n");           // Right Alt (AltGr)
++	fprintf(file, "\t\tmodifier_map Mod1 {<I64>};\n");
++	fprintf(file, "\t\tmodifier_map Mod2 {<I77>};\n");
++	fprintf(file, "\t\tmodifier_map Mod4 {<I133>, <I134>};\n");
++	fprintf(file, "\t\tmodifier_map Mod5 {<I108>};\n");
+ 
+ 	fprintf(file, "\t};\n");
+ }
+@@ -571,12 +571,12 @@ status_t ProduceXkbKeymap(int &fd)
+ 	fd = CreateMemoryFile();
+ 	FileDescriptorCloser fdCloser(fd);
+ 	if (!fdCloser.IsSet())
+-		return B_ERROR; // Use `errno`?
++		return B_ERROR;
+ 
+ 	FILE *file = fdopen(dup(fd), "w");
+ 	FileCloser fileCloser(file);
+ 	if (!fileCloser.IsSet())
+-		return B_ERROR; // Use `errno`?
++		return B_ERROR;
+ 
+ 	fprintf(file, "xkb_keymap {\n");
+ 
+diff --git a/util/DoublyLinkedList.h b/util/DoublyLinkedList.h
+index 6194567..9f5a5fc 100644
+--- a/util/DoublyLinkedList.h
++++ b/util/DoublyLinkedList.h
+@@ -22,7 +22,7 @@
+ 
+ #ifdef __cplusplus
+ 
+-// DoublyLinkedListLink
++
+ template<typename Element>
+ class DoublyLinkedListLink {
+ public:
+@@ -30,7 +30,7 @@ public:
+ 	Element*	previous;
+ };
+ 
+-// DoublyLinkedListLinkImpl
++
+ template<typename Element>
+ class DoublyLinkedListLinkImpl {
+ private:
+@@ -46,7 +46,7 @@ private:
+ 	DLL_Link	fDoublyLinkedListLink;
+ };
+ 
+-// DoublyLinkedListStandardGetLink
++
+ template<typename Element>
+ class DoublyLinkedListStandardGetLink {
+ private:
+@@ -64,7 +64,7 @@ public:
+ 	}
+ };
+ 
+-// DoublyLinkedListMemberGetLink
++
+ template<typename Element,
+ 	DoublyLinkedListLink<Element> Element::* LinkMember = &Element::fLink>
+ class DoublyLinkedListMemberGetLink {
+@@ -83,7 +83,7 @@ public:
+ 	}
+ };
+ 
+-// DoublyLinkedListCLink - interface to struct list
++
+ template<typename Element>
+ class DoublyLinkedListCLink {
+ 	private:
+@@ -101,12 +101,12 @@ class DoublyLinkedListCLink {
+ 		}
+ };
+ 
+-// for convenience
++
+ #define DOUBLY_LINKED_LIST_TEMPLATE_LIST \
+ 	template<typename Element, typename GetLink>
+ #define DOUBLY_LINKED_LIST_CLASS_NAME DoublyLinkedList<Element, GetLink>
+ 
+-// DoublyLinkedList
++
+ template<typename Element,
+ 	typename GetLink = DoublyLinkedListStandardGetLink<Element> >
+ class DoublyLinkedList {
+@@ -358,14 +358,14 @@ public:
+ 	static inline Element* GetNext(Element* element);
+ 
+ 	inline bool Contains(Element* element) const;
+-		// O(n)!
++
+ 
+ 	inline int32 Count() const;
+-		// O(n)!
++
+ 
+ 	template<typename Less>
+ 	void Sort(const Less& less);
+-		// O(n^2)
++
+ 
+ 	inline Iterator GetIterator()				{ return Iterator(this); }
+ 	inline ConstIterator GetIterator() const	{ return ConstIterator(this); }
+@@ -377,7 +377,7 @@ public:
+ 
+ private:
+ 	inline void Insert(Element* before, Element* element);
+-		// TODO: Obsolete! Use InsertBefore() instead!
++
+ 
+ private:
+ 	Element*		fFirst;
+@@ -387,9 +387,9 @@ private:
+ };
+ 
+ 
+-// inline methods
+ 
+-// Insert
++
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* element, bool back)
+@@ -402,7 +402,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* element, bool back)
+ 
+ 		Link* elLink = sGetLink(element);
+ 		if (back) {
+-			// append
++
+ 			elLink->previous = fLast;
+ 			elLink->next = NULL;
+ 			if (fLast)
+@@ -411,7 +411,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* element, bool back)
+ 				fFirst = element;
+ 			fLast = element;
+ 		} else {
+-			// prepend
++
+ 			elLink->previous = NULL;
+ 			elLink->next = fFirst;
+ 			if (fFirst)
+@@ -492,7 +492,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Insert(Element* before, Element* element)
+ }
+ 
+ 
+-// Add
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::Add(Element* element, bool back)
+@@ -500,7 +500,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Add(Element* element, bool back)
+ 	Insert(element, back);
+ }
+ 
+-// Remove
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::Remove(Element* element)
+@@ -529,7 +529,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Remove(Element* element)
+ 	elLink->next = elLink->previous = NULL;
+ }
+ 
+-// Swap
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::Swap(Element* a, Element* b)
+@@ -552,7 +552,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Swap(Element* a, Element* b)
+ 	}
+ }
+ 
+-// TakeFrom
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::TakeFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList)
+@@ -571,7 +571,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::TakeFrom(DOUBLY_LINKED_LIST_CLASS_NAME* fromList)
+ 	}
+ }
+ 
+-// RemoveAll
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveAll()
+@@ -580,7 +580,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveAll()
+ 	fLast = NULL;
+ }
+ 
+-// RemoveHead
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ Element*
+ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveHead()
+@@ -590,7 +590,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveHead()
+ 	return element;
+ }
+ 
+-// RemoveTail
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ Element*
+ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveTail()
+@@ -600,7 +600,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::RemoveTail()
+ 	return element;
+ }
+ 
+-// GetPrevious
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ Element*
+ DOUBLY_LINKED_LIST_CLASS_NAME::GetPrevious(Element* element)
+@@ -611,7 +611,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::GetPrevious(Element* element)
+ 	return result;
+ }
+ 
+-// GetNext
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ Element*
+ DOUBLY_LINKED_LIST_CLASS_NAME::GetNext(Element* element)
+@@ -636,7 +636,7 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Contains(Element* _element) const
+ }
+ 
+ 
+-// Count
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ int32
+ DOUBLY_LINKED_LIST_CLASS_NAME::Count() const
+@@ -653,7 +653,7 @@ template<typename Less>
+ void
+ DOUBLY_LINKED_LIST_CLASS_NAME::Sort(const Less& less)
+ {
+-	// selection sort
++
+ 	Element* tail = Head();
+ 	while (tail != NULL) {
+ 		Element* leastElement = tail;
+@@ -672,10 +672,10 @@ DOUBLY_LINKED_LIST_CLASS_NAME::Sort(const Less& less)
+ }
+ 
+ 
+-// sGetLink
++
+ DOUBLY_LINKED_LIST_TEMPLATE_LIST
+ GetLink DOUBLY_LINKED_LIST_CLASS_NAME::sGetLink;
+ 
+-#endif	/* __cplusplus */
++#endif
+ 
+-#endif	// _KERNEL_UTIL_DOUBLY_LINKED_LIST_H
++#endif

@@ -1,3 +1,5 @@
+#include "HaikuScale.h"
+#include "FractionalTrace.h"
 #include "HaikuOutput.h"
 #include <Screen.h>
 #include <AutoDeleter.h>
@@ -39,7 +41,16 @@ void HaikuOutputGlobal::Bind(struct wl_client *wl_client, uint32_t version, uint
 	int32_t width = (int32_t)screen.Frame().Width() + 1;
 	int32_t height = (int32_t)screen.Frame().Height() + 1;
 	output->SendGeometry(0, 0, (float)width * 0.3528, (float)height * 0.3528, WlOutput::subpixelUnknown, "Unknown make", "Unknown model", WlOutput::transformNormal);
-	output->SendMode(WlOutput::modeCurrent | WlOutput::modePreferred, width, height, 60000);
-	output->SendScale(1);
-	output->SendDone();
+
+
+
+	int32 density = (int32)std::ceil(DesktopScale());
+	int32 logicalWidth = LogicalCount(width - 1);
+	int32 logicalHeight = LogicalCount(height - 1);
+	output->SendMode(WlOutput::modeCurrent | WlOutput::modePreferred,
+		logicalWidth * density, logicalHeight * density, 60000);
+	if (version >= 2) output->SendScale(density);
+	FractionalTrace("global.output native=%dx%d logical=%dx%d desktop_scale=%.4f buffer_density=%d",
+		width, height, logicalWidth, logicalHeight, DesktopScale(), density);
+	if (version >= 2) output->SendDone();
 }

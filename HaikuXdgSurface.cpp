@@ -1,3 +1,4 @@
+#include "HaikuScale.h"
 #include "HaikuXdgSurface.h"
 #include "HaikuXdgShell.h"
 #include "HaikuXdgToplevel.h"
@@ -38,15 +39,15 @@ void XdgSurfaceHook::HandleCommit()
 		fXdgSurface->fPendingGeometry.x, fXdgSurface->fPendingGeometry.y,
 		fXdgSurface->fPendingGeometry.width, fXdgSurface->fPendingGeometry.height,
 		fXdgSurface->fPendingGeometry.valid, fXdgSurface->fAckSerial);
-	// TODO: move to HaikuXdgToplevel/HaikuXdgPopup
+
 	if (fXdgSurface->HasServerDecoration()) {
-		// toplevel: window size limits
+
 		if (fXdgSurface->fToplevel != NULL && fXdgSurface->fToplevel->fSizeLimitsDirty) {
 			fXdgSurface->Window()->SetSizeLimits(
-				fXdgSurface->fToplevel->fMinWidth  == 0 ? 0     : fXdgSurface->fToplevel->fMinWidth  - 1,
-				fXdgSurface->fToplevel->fMaxWidth  == 0 ? 32768 : fXdgSurface->fToplevel->fMaxWidth  - 1,
-				fXdgSurface->fToplevel->fMinHeight == 0 ? 0     : fXdgSurface->fToplevel->fMinHeight - 1,
-				fXdgSurface->fToplevel->fMaxHeight == 0 ? 32768 : fXdgSurface->fToplevel->fMaxHeight - 1
+				fXdgSurface->fToplevel->fMinWidth  == 0 ? 0     : NativeExtent(fXdgSurface->fToplevel->fMinWidth - 1),
+				fXdgSurface->fToplevel->fMaxWidth  == 0 ? 32768 : NativeExtent(fXdgSurface->fToplevel->fMaxWidth - 1),
+				fXdgSurface->fToplevel->fMinHeight == 0 ? 0     : NativeExtent(fXdgSurface->fToplevel->fMinHeight - 1),
+				fXdgSurface->fToplevel->fMaxHeight == 0 ? 32768 : NativeExtent(fXdgSurface->fToplevel->fMaxHeight - 1)
 			);
 			if (
 				fXdgSurface->fToplevel->fMinWidth != 0 && fXdgSurface->fToplevel->fMinWidth == fXdgSurface->fToplevel->fMaxWidth &&
@@ -65,7 +66,7 @@ void XdgSurfaceHook::HandleCommit()
 			BSize newSize = oldSize;
 
 			if (fXdgSurface->Surface()->View() != NULL)
-				AppKitPtrs::LockedPtr(fXdgSurface->Surface()->View())->MoveTo(-fXdgSurface->fPendingGeometry.x, -fXdgSurface->fPendingGeometry.y);
+				AppKitPtrs::LockedPtr(fXdgSurface->Surface()->View())->MoveTo(ToNative(BPoint(-fXdgSurface->fPendingGeometry.x, -fXdgSurface->fPendingGeometry.y)));
 			newSize.width = fXdgSurface->fPendingGeometry.width - 1;
 			newSize.height = fXdgSurface->fPendingGeometry.height - 1;
 
@@ -74,7 +75,7 @@ void XdgSurfaceHook::HandleCommit()
 				fXdgSurface->fToplevel->fWidth = (int32_t)newSize.width + 1;
 				fXdgSurface->fToplevel->fHeight = (int32_t)newSize.height + 1;
 
-				fXdgSurface->Window()->ResizeTo(newSize.width, newSize.height);
+				fXdgSurface->Window()->ResizeTo(NativeExtent(newSize.width), NativeExtent(newSize.height));
 			}
 		}
 	} else {
@@ -83,13 +84,14 @@ void XdgSurfaceHook::HandleCommit()
 			fXdgSurface->fPendingGeometry.y != fXdgSurface->fGeometry.y
 		) {
 			fXdgSurface->Window()->MoveBy(
-				fXdgSurface->fGeometry.x - fXdgSurface->fPendingGeometry.x,
-				fXdgSurface->fGeometry.y - fXdgSurface->fPendingGeometry.y
+				(fXdgSurface->fGeometry.x - fXdgSurface->fPendingGeometry.x) * DesktopScale(),
+				(fXdgSurface->fGeometry.y - fXdgSurface->fPendingGeometry.y) * DesktopScale()
 			);
 		}
 		if (fXdgSurface->Surface()->Bitmap() != NULL) {
 			BSize oldSize = fXdgSurface->Window()->Size();
-			BSize newSize = fXdgSurface->Surface()->Size();
+			BSize logicalSize = fXdgSurface->Surface()->Size();
+			BSize newSize(NativeExtent(logicalSize.width), NativeExtent(logicalSize.height));
 			if (oldSize != newSize) {
 				fXdgSurface->Window()->ResizeTo(newSize.width, newSize.height);
 			}
@@ -97,7 +99,7 @@ void XdgSurfaceHook::HandleCommit()
 	}
 	fXdgSurface->fGeometry = fXdgSurface->fPendingGeometry;
 
-	// initial window show
+
 	if (!fXdgSurface->fSurfaceInitalized && fXdgSurface->Surface()->Bitmap() != NULL) {
 		if (fXdgSurface->Surface()->ServerDecoration() != NULL) {
 			fXdgSurface->Window()->SetLook(fXdgSurface->Surface()->ServerDecoration()->Look());
@@ -117,7 +119,7 @@ void XdgSurfaceHook::HandleCommit()
 		fXdgSurface->Window()->MoveTo(wndRect.left, wndRect.top);
 	}
 
-	// initial configure
+
 	if (!fXdgSurface->fConfigureCalled) {
 		if (fXdgSurface->fToplevel != NULL) {
 			fXdgSurface->fToplevel->DoSendConfigure();
@@ -132,7 +134,7 @@ void XdgSurfaceHook::HandleCommit()
 }
 
 
-//#pragma mark - HaikuXdgSurface
+
 HaikuXdgSurface::~HaikuXdgSurface()
 {
 	fSurface->SetHook(NULL);
@@ -162,21 +164,24 @@ bool HaikuXdgSurface::HasServerDecoration()
 void HaikuXdgSurface::ConvertFromScreen(BPoint &pt)
 {
 	Window()->ConvertFromScreen(&pt);
-	if (fGeometry.valid)
+	pt = ToLogical(pt);
+	if (fGeometry.valid && !HasServerDecoration())
 		pt -= BPoint(fGeometry.x, fGeometry.y);
 }
 
 void HaikuXdgSurface::ConvertToScreen(BPoint &pt)
 {
-	if (fGeometry.valid)
+	if (fGeometry.valid && !HasServerDecoration())
 		pt += BPoint(fGeometry.x, fGeometry.y);
 
+	pt = ToNative(pt);
 	Window()->ConvertToScreen(&pt);
 }
 
 void HaikuXdgSurface::ConvertFromScreen(BRect &rect)
 {
 	Window()->ConvertFromScreen(&rect);
+	rect = LogicalRect(rect);
 	if (fGeometry.valid && !HasServerDecoration())
 		rect.OffsetBy(-fGeometry.x, -fGeometry.y);
 }
@@ -186,6 +191,7 @@ void HaikuXdgSurface::ConvertToScreen(BRect &rect)
 	if (fGeometry.valid && !HasServerDecoration())
 		rect.OffsetBy(fGeometry.x, fGeometry.y);
 
+	rect = NativeRect(rect);
 	Window()->ConvertToScreen(&rect);
 }
 

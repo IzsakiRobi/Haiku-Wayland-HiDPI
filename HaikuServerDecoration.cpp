@@ -13,7 +13,7 @@ enum {
 };
 
 
-//#pragma mark - HaikuServerDecorationManager
+
 
 class HaikuServerDecorationManager: public OrgKdeKwinServerDecorationManager {
 protected:
@@ -53,7 +53,7 @@ void HaikuServerDecorationManager::HandleCreate(uint32_t id, struct wl_resource 
 }
 
 
-//#pragma mark - HaikuServerDecoration
+
 
 HaikuServerDecoration *HaikuServerDecoration::Create(HaikuServerDecorationManager *manager, struct HaikuSurface *surface, uint32_t id)
 {

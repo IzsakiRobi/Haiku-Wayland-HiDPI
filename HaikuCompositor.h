@@ -103,6 +103,15 @@ private:
 	State fPendingState{};
 	uint32 fPendingFields{};
 	BRegion fDirty;
+	BBitmap *fNativeCache{};
+	BView *fNativeCacheView{};
+	uint64 fContentSerial = 1;
+	bool fContentChanged = false;
+	uint64 fNativeCacheSerial{};
+	BBitmap *fNativeCacheSource{};
+	BRect fNativeCacheSourceRect;
+	BRect fNativeCacheDestRect;
+	drawing_mode fNativeCacheMode = B_OP_COPY;
 	WaylandView *fView{};
 	HaikuXdgSurface *fXdgSurface{};
 	HaikuServerDecoration *fServerDecoration{};
@@ -129,6 +138,9 @@ public:
 	void AttachViewsToEarlierSubsurfaces();
 	void Detach();
 	void Invalidate();
+	void InvalidateNativeCache();
+	bool EnsureNativeCache(BBitmap *source, const BRect &sourceRect,
+		const BRect &destRect, drawing_mode mode);
 	void CallFrameCallbacks();
 
 	void SetHook(Hook *hook);

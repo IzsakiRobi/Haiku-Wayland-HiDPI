@@ -1,3 +1,4 @@
+#include "HaikuScale.h"
 #include "HaikuXdgToplevel.h"
 #include "HaikuXdgShell.h"
 #include "HaikuXdgSurface.h"
@@ -80,19 +81,19 @@ void WaylandWindow::FrameResized(float newWidth, float newHeight)
 		fToplevel->XdgSurface()->Surface(), newWidth + 1, newHeight + 1);
 	WaylandEnv vlEnv(this);
 
-	if (fToplevel->fSizeChanged) {
-		fToplevel->fSizeChanged = false;
+
+	if (Bounds().Width() != newWidth || Bounds().Height() != newHeight)
 		return;
-	}
+	fToplevel->fSizeChanged = false;
 
 	if(!fToplevel->XdgSurface()->HasServerDecoration())
 		return;
 
-	if ((int32_t)newWidth + 1 == fToplevel->fWidth && (int32_t)newHeight + 1 == fToplevel->fHeight)
+	if (LogicalCount(newWidth) == fToplevel->fWidth && LogicalCount(newHeight) == fToplevel->fHeight)
 		return;
 
-	fToplevel->fWidth = (int32_t)newWidth + 1;
-	fToplevel->fHeight = (int32_t)newHeight + 1;
+	fToplevel->fWidth = LogicalCount(newWidth);
+	fToplevel->fHeight = LogicalCount(newHeight);
 
 	fToplevel->fResizeSerial = fToplevel->XdgSurface()->NextSerial();
 
@@ -112,13 +113,13 @@ void WaylandWindow::DispatchMessage(BMessage *msg, BHandler *target)
 			uint32 modifiers;
 			if (msg->FindInt32("key", &key) == B_OK) {
 				msg->FindInt32("modifiers", (int32*)&modifiers);
-				if (key == 0x0e) { // Print Screen
+				if (key == 0x0e) {
 					BWindow::DispatchMessage(msg, target);
 					return;
 				}
 				if (modifiers & B_CONTROL_KEY) {
 					switch (key) {
-						case 0x26: // Command + Tab
+						case 0x26:
 							BWindow::DispatchMessage(msg, target);
 							return;
 					}
@@ -148,7 +149,7 @@ void WaylandWindow::UpdateRefreshRate()
 }
 
 
-//#pragma mark - HaikuXdgToplevel
+
 
 void HaikuXdgToplevel::DoSendConfigure()
 {
@@ -172,7 +173,7 @@ void HaikuXdgToplevel::DoSendConfigure()
 
 void HaikuXdgToplevel::HandleSetParent(struct wl_resource *_parent)
 {
-	// TODO: update root window when parent window is closed
+
 	HaikuXdgToplevel *parent = HaikuXdgToplevel::FromResource(_parent);
 	if (parent == NULL) {
 		if (XdgSurface()->fRoot != XdgSurface()) {
@@ -243,8 +244,8 @@ void HaikuXdgToplevel::HandleSetFullscreen(struct wl_resource *output)
 	BRect screenFrame = BScreen(fWindow).Frame();
 	fWindow->MoveTo(screenFrame.LeftTop());
 	fWindow->ResizeTo(screenFrame.Width(), screenFrame.Height());
-	fWidth = (int32_t)screenFrame.Width() + 1;
-	fHeight = (int32_t)screenFrame.Height() + 1;
+	fWidth = LogicalCount(screenFrame.Width());
+	fHeight = LogicalCount(screenFrame.Height());
 	DoSendConfigure();
 	XdgSurface()->SendConfigure(XdgSurface()->NextSerial());
 }
@@ -256,8 +257,8 @@ void HaikuXdgToplevel::HandleUnsetFullscreen()
 	fSizeChanged = true;
 	fWindow->MoveTo(fSavedPos.LeftTop());
 	fWindow->ResizeTo(fSavedPos.Width(), fSavedPos.Height());
-	fWidth = (int32_t)fSavedPos.Width() + 1;
-	fHeight = (int32_t)fSavedPos.Height() + 1;
+	fWidth = LogicalCount(fSavedPos.Width());
+	fHeight = LogicalCount(fSavedPos.Height());
 	DoSendConfigure();
 	XdgSurface()->SendConfigure(XdgSurface()->NextSerial());
 }
@@ -292,8 +293,8 @@ HaikuXdgToplevel::~HaikuXdgToplevel()
 	if (fWindow != NULL) {
 		fWindow->fToplevel = NULL;
 		fWindow->PostMessage(B_QUIT_REQUESTED);
-		//fWindow->Lock();
-		//fWindow->Quit();
+
+
 		fWindow = NULL;
 	}
 }

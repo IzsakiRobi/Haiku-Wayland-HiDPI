@@ -21,7 +21,7 @@ public:
 		};
 		uint32_t val;
 	};
-	
+
 	struct State {
 		Valid valid{};
 		struct {

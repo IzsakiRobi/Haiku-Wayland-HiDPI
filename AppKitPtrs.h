@@ -77,4 +77,4 @@ ExternalPtr<T> MakeExternal(Args&&... args)
 }
 }
 
-#endif	// _APPKITPTRS_H_
+#endif

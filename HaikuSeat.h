@@ -83,6 +83,9 @@ private:
 	HaikuSurface *fPointerFocus{};
 	HaikuSurface *fKeyboardFocus{};
 	uint32 fOldMouseBtns{};
+	HaikuSurface *fLastMotionSurface{};
+	BPoint fLastMotionWhere{B_ORIGIN};
+	bool fHaveLastMotion = false;
 	Track fTrack;
 
 	uint32_t NextSerial();

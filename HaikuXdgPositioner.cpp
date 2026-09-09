@@ -258,7 +258,7 @@ static void UnconstrainPosition(const HaikuXdgPositioner::State &state, BRect &p
 }
 
 
-//#pragma mark - HaikuXdgPositioner
+
 
 HaikuXdgPositioner *HaikuXdgPositioner::Create(HaikuXdgWmBase *client, uint32_t id)
 {

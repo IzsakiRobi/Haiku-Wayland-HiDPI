@@ -1,3 +1,4 @@
+#include "HaikuScale.h"
 #include "HaikuTextInput.h"
 #include <text-input-unstable-v3-protocol.h>
 
@@ -18,7 +19,7 @@ enum {
 };
 
 
-// #pragma mark - HaikuTextInputGlobal
+
 
 HaikuTextInputGlobal *HaikuTextInputGlobal::Create(struct wl_display *display, HaikuSeatGlobal *seat)
 {
@@ -36,7 +37,7 @@ HaikuTextInputGlobal::~HaikuTextInputGlobal()
 
 void HaikuTextInputGlobal::Bind(struct wl_client *wl_client, uint32_t version, uint32_t id)
 {
-	//printf("HaikuTextInputGlobal::Bind()\n");
+
 	HaikuTextInputManager *res = new(std::nothrow) HaikuTextInputManager(this);
 	if (res == NULL) {
 		wl_client_post_no_memory(wl_client);
@@ -87,8 +88,8 @@ void HaikuTextInputGlobal::Leave(HaikuSurface *surface)
 
 bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 {
-	//printf("HaikuTextInputGlobal::MessageReceived()\n");
-	
+
+
 	if (fSeat->fKeyboardFocus != surface) {
 		return false;
 	}
@@ -100,7 +101,7 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			}
 			switch (opcode) {
 				case B_INPUT_METHOD_STARTED: {
-					//printf("B_INPUT_METHOD_STARTED\n");
+
 					if (msg->FindMessenger("be:reply_to", &fImReplyMsgr) < B_OK) {
 						Clear();
 						return true;
@@ -110,7 +111,7 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 					return true;
 				}
 				case B_INPUT_METHOD_STOPPED: {
-					//printf("B_INPUT_METHOD_STOPPED\n");
+
 
 					for (HaikuTextInput *textInput = fTextInputIfaces.First(); textInput != NULL; textInput = fTextInputIfaces.GetNext(textInput)) {
 						if (textInput->Client() != fSeat->fKeyboardFocus->Client()) continue;
@@ -120,8 +121,8 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 					return true;
 				}
 				case B_INPUT_METHOD_CHANGED: {
-					//printf("B_INPUT_METHOD_CHANGED\n");
-					
+
+
 					if (msg->FindString("be:string", &fString) < B_OK) {
 						fString = "";
 					}
@@ -135,9 +136,9 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 					if (msg->FindBool("be:confirmed", &fConfirmed) < B_OK) {
 						fConfirmed = false;
 					}
-					//printf("  string: \"%s\"\n", fString.String());
-					//printf("  selection: %" B_PRId32 ", %" B_PRId32 "\n", fSelectionBeg, fSelectionEnd);
-					
+
+
+
 					for (HaikuTextInput *textInput = fTextInputIfaces.First(); textInput != NULL; textInput = fTextInputIfaces.GetNext(textInput)) {
 						if (textInput->Client() != fSeat->fKeyboardFocus->Client()) continue;
 						SendState(textInput);
@@ -149,24 +150,24 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 					return true;
 				};
 				case B_INPUT_METHOD_LOCATION_REQUEST: {
-					//printf("B_INPUT_METHOD_LOCATION_REQUEST\n");
+
 					if (!fImReplyMsgr.IsValid()) {
 						return true;
 					}
 					int32 charCount = UTF8CountChars(fString.String(), fString.Length());
-					BPoint location = fCursorRect.LeftTop();
-					float height = fCursorRect.Height();
+					BPoint location = ToNative(fCursorRect.LeftTop());
+					float height = NativeExtent(fCursorRect.Height());
 					AppKitPtrs::LockedPtr(surface->View())->ConvertToScreen(&location);
-		
+
 					BMessage reply(B_INPUT_METHOD_EVENT);
 					reply.AddInt32("be:opcode", B_INPUT_METHOD_LOCATION_REQUEST);
 					for (int32 i = 0; i < charCount; i++) {
 						reply.AddPoint("be:location_reply", location);
 						reply.AddFloat("be:height_reply", height);
 					}
-		
+
 					fImReplyMsgr.SendMessage(&reply);
-					
+
 					return true;
 				}
 			}
@@ -177,7 +178,7 @@ bool HaikuTextInputGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 }
 
 
-// #pragma mark - HaikuTextInputManager
+
 
 void HaikuTextInputManager::HandleGetTextInput(uint32_t id, struct wl_resource *seat)
 {
@@ -192,7 +193,7 @@ void HaikuTextInputManager::HandleGetTextInput(uint32_t id, struct wl_resource *
 }
 
 
-// #pragma mark - HaikuTextInput
+
 
 HaikuTextInput::HaikuTextInput(HaikuTextInputGlobal *global, HaikuSeatGlobal *seat):
 	fGlobal(global),
@@ -208,12 +209,12 @@ HaikuTextInput::~HaikuTextInput()
 
 void HaikuTextInput::HandleEnable()
 {
-	//printf("HaikuTextInput::HandleEnable()\n");
+
 }
 
 void HaikuTextInput::HandleDisable()
 {
-	//printf("HaikuTextInput::HandleDisable()\n");
+
 	if (fGlobal->fActive) {
 		if (fGlobal->fImReplyMsgr.IsValid()) {
 			BMessage reply(B_INPUT_METHOD_EVENT);
@@ -226,12 +227,12 @@ void HaikuTextInput::HandleDisable()
 
 void HaikuTextInput::HandleSetSurroundingText(const char *text, int32_t cursor, int32_t anchor)
 {
-	//printf("HaikuTextInput::HandleSetSurroundingText(\"%s\", %" PRId32 ", %" PRId32 ")\n", text, cursor, anchor);
+
 }
 
 void HaikuTextInput::HandleSetTextChangeCause(uint32_t cause)
 {
-	//printf("HaikuTextInput::HandleSetTextChangeCause(%" PRId32 ")\n", cause);
+
 }
 
 void HaikuTextInput::HandleSetContentType(uint32_t hint, uint32_t purpose)
@@ -240,13 +241,13 @@ void HaikuTextInput::HandleSetContentType(uint32_t hint, uint32_t purpose)
 
 void HaikuTextInput::HandleSetCursorRectangle(int32_t x, int32_t y, int32_t width, int32_t height)
 {
-	//printf("HaikuTextInput::HandleSetCursorRectangle(%" PRId32 ", %" PRId32 ", %" PRId32 ", %" PRId32 ")\n", x, y, width, height);
+
 	fGlobal->fCursorRect = BRect(x, y, x + width - 1, y + height - 1);
 }
 
 void HaikuTextInput::HandleCommit()
 {
-	//printf("HaikuTextInput::HandleCommit()\n");
+
 	fGlobal->fSerial++;
 
 	fGlobal->SendState(this);

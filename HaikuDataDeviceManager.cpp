@@ -209,7 +209,7 @@ static void SanitizeFileName(BString &name)
 }
 
 
-//#pragma mark - HaikuDataSource
+
 
 void HaikuDataSource::ConvertToHaikuMessage(BMessage &dstMsg, const BMessage &srcMsg)
 {
@@ -467,7 +467,7 @@ void HaikuDataSource::HandleSetActions(uint32_t dndActions)
 }
 
 
-//#pragma mark - HaikuDataOffer
+
 
 HaikuDataOffer *HaikuDataOffer::Create(HaikuDataDevice *dataDevice, const BMessage &data)
 {
@@ -728,7 +728,7 @@ void HaikuDataOffer::HandleSetActions(uint32_t dnd_actions, uint32_t preferred_a
 }
 
 
-//#pragma mark - HaikuDataDevice
+
 
 HaikuDataDevice::ClipboardWatcher::ClipboardWatcher(HaikuDataDevice *device)
 	: BHandler("clipboardWatcher"), fDevice(device)
@@ -933,7 +933,7 @@ void HaikuDataDevice::HandleSetSelection(struct wl_resource *_source, uint32_t s
 }
 
 
-//#pragma mark - HaikuDataDeviceManager
+
 
 class HaikuDataDeviceManager: public WlDataDeviceManager {
 private:

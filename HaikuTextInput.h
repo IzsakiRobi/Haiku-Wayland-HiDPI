@@ -55,7 +55,7 @@ private:
 	bool fConfirmed {};
 
 	BRect fCursorRect;
-	
+
 	HaikuTextInputGlobal(HaikuSeatGlobal *seat): fSeat(seat) {}
 
 	void Clear();

@@ -5,7 +5,7 @@
 class WlGlocal {
 private:
 	struct wl_global *fGlobal = NULL;
-	
+
 	static void Binder(struct wl_client *wl_client, void *data, uint32_t version, uint32_t id);
 
 public:

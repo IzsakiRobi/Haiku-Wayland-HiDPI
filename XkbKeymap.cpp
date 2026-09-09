@@ -398,33 +398,33 @@ static void GenerateCompatibility(FILE *file)
 
 static bool IsNumpadDigitKey(uint32 haikuKey)
 {
-	return (haikuKey >= 0x37 && haikuKey <= 0x39) ||  // KP7-KP9
-		   (haikuKey >= 0x48 && haikuKey <= 0x4a) ||  // KP4-KP6
-		   (haikuKey >= 0x58 && haikuKey <= 0x5a) ||  // KP1-KP3
-		   (haikuKey == 0x64 || haikuKey == 0x65);    // KP0, KP_Decimal
+	return (haikuKey >= 0x37 && haikuKey <= 0x39) ||
+		   (haikuKey >= 0x48 && haikuKey <= 0x4a) ||
+		   (haikuKey >= 0x58 && haikuKey <= 0x5a) ||
+		   (haikuKey == 0x64 || haikuKey == 0x65);
 }
 
 static bool IsNumpadOperatorKey(uint32 haikuKey)
 {
-	return (haikuKey >= 0x23 && haikuKey <= 0x25) ||  // KP_Divide, KP_Multiply, KP_Subtract
-		   (haikuKey == 0x3a) ||                       // KP_Add
-		   (haikuKey == 0x5b);                         // KP_Enter
+	return (haikuKey >= 0x23 && haikuKey <= 0x25) ||
+		   (haikuKey == 0x3a) ||
+		   (haikuKey == 0x5b);
 }
 
 static void WriteNumpadDigitSymbol(FILE *file, uint32 haikuKey)
 {
 	switch (haikuKey) {
-		case 0x37: fprintf(file, "KP_Home, KP_7"); break;      // KP_7
-		case 0x38: fprintf(file, "KP_Up, KP_8"); break;        // KP_8
-		case 0x39: fprintf(file, "KP_Prior, KP_9"); break;     // KP_9
-		case 0x48: fprintf(file, "KP_Left, KP_4"); break;      // KP_4
-		case 0x49: fprintf(file, "KP_Begin, KP_5"); break;     // KP_5
-		case 0x4a: fprintf(file, "KP_Right, KP_6"); break;     // KP_6
-		case 0x58: fprintf(file, "KP_End, KP_1"); break;       // KP_1
-		case 0x59: fprintf(file, "KP_Down, KP_2"); break;      // KP_2
-		case 0x5a: fprintf(file, "KP_Next, KP_3"); break;      // KP_3
-		case 0x64: fprintf(file, "KP_Insert, KP_0"); break;    // KP_0
-		case 0x65: fprintf(file, "KP_Delete, KP_Decimal"); break; // KP_Decimal
+		case 0x37: fprintf(file, "KP_Home, KP_7"); break;
+		case 0x38: fprintf(file, "KP_Up, KP_8"); break;
+		case 0x39: fprintf(file, "KP_Prior, KP_9"); break;
+		case 0x48: fprintf(file, "KP_Left, KP_4"); break;
+		case 0x49: fprintf(file, "KP_Begin, KP_5"); break;
+		case 0x4a: fprintf(file, "KP_Right, KP_6"); break;
+		case 0x58: fprintf(file, "KP_End, KP_1"); break;
+		case 0x59: fprintf(file, "KP_Down, KP_2"); break;
+		case 0x5a: fprintf(file, "KP_Next, KP_3"); break;
+		case 0x64: fprintf(file, "KP_Insert, KP_0"); break;
+		case 0x65: fprintf(file, "KP_Delete, KP_Decimal"); break;
 		default: fprintf(file, "NoSymbol, NoSymbol"); break;
 	}
 }
@@ -432,11 +432,11 @@ static void WriteNumpadDigitSymbol(FILE *file, uint32 haikuKey)
 static void WriteNumpadOperatorSymbol(FILE *file, uint32 haikuKey)
 {
 	switch (haikuKey) {
-		case 0x23: fprintf(file, "KP_Divide, KP_Divide, KP_Divide, KP_Divide"); break;     // KP_Divide
-		case 0x24: fprintf(file, "KP_Multiply, KP_Multiply, KP_Multiply, KP_Multiply"); break; // KP_Multiply
-		case 0x25: fprintf(file, "KP_Subtract, KP_Subtract, KP_Subtract, KP_Subtract"); break; // KP_Subtract
-		case 0x3a: fprintf(file, "KP_Add, KP_Add, KP_Add, KP_Add"); break;                 // KP_Add
-		case 0x5b: fprintf(file, "KP_Enter, KP_Enter, KP_Enter, KP_Enter"); break;         // KP_Enter
+		case 0x23: fprintf(file, "KP_Divide, KP_Divide, KP_Divide, KP_Divide"); break;
+		case 0x24: fprintf(file, "KP_Multiply, KP_Multiply, KP_Multiply, KP_Multiply"); break;
+		case 0x25: fprintf(file, "KP_Subtract, KP_Subtract, KP_Subtract, KP_Subtract"); break;
+		case 0x3a: fprintf(file, "KP_Add, KP_Add, KP_Add, KP_Add"); break;
+		case 0x5b: fprintf(file, "KP_Enter, KP_Enter, KP_Enter, KP_Enter"); break;
 		default: fprintf(file, "NoSymbol, NoSymbol, NoSymbol, NoSymbol"); break;
 	}
 }
@@ -449,7 +449,7 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
 
 	struct USLayout {
 		uint32 haikuKey;
-		const char* symbols[4]; // Base, Shift, AltGr, AltGr+Shift
+		const char* symbols[4];
 	} usLayout[] = {
 		{0x27, {"q", "Q", "NoSymbol", "NoSymbol"}},
 		{0x28, {"w", "W", "NoSymbol", "NoSymbol"}},
@@ -507,12 +507,12 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
 		} else {
 			fprintf(file, "\t\tkey <I%" B_PRIu32 "> {type = \"FOUR_LEVEL\", symbols[Group1] = [", wlKey + 8);
 
-			// Group1 - current keymap
+
 			uint32 offsets[4] = {
-				GetOffsetForLevel(map, haikuKey, 0), // normal
-				GetOffsetForLevel(map, haikuKey, 1), // shift
-				GetOffsetForLevel(map, haikuKey, 4), // option (AltGr)
-				GetOffsetForLevel(map, haikuKey, 5)  // option+shift
+				GetOffsetForLevel(map, haikuKey, 0),
+				GetOffsetForLevel(map, haikuKey, 1),
+				GetOffsetForLevel(map, haikuKey, 4),
+				GetOffsetForLevel(map, haikuKey, 5)
 			};
 
 			int levels[4] = {0, 1, 4, 5};
@@ -521,7 +521,7 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
 				if (level < 3) fprintf(file, ", ");
 			}
 
-			// Group2 - latin keymap for hotkeys
+
 			fprintf(file, "], symbols[Group2] = [");
 
 			bool foundUS = false;
@@ -550,10 +550,10 @@ static void GenerateSymbols(FILE *file, key_map *map, char *keyBuffer)
 	fprintf(file, "\t\tmodifier_map Shift {<I50>, <I62>};\n");
 	fprintf(file, "\t\tmodifier_map Lock {<I66>};\n");
 	fprintf(file, "\t\tmodifier_map Control {<I37>, <I105>};\n");
-	fprintf(file, "\t\tmodifier_map Mod1 {<I64>};\n");            // Left Alt
-	fprintf(file, "\t\tmodifier_map Mod2 {<I77>};\n");            // NumLock
-	fprintf(file, "\t\tmodifier_map Mod4 {<I133>, <I134>};\n");   // Super (Command)
-	fprintf(file, "\t\tmodifier_map Mod5 {<I108>};\n");           // Right Alt (AltGr)
+	fprintf(file, "\t\tmodifier_map Mod1 {<I64>};\n");
+	fprintf(file, "\t\tmodifier_map Mod2 {<I77>};\n");
+	fprintf(file, "\t\tmodifier_map Mod4 {<I133>, <I134>};\n");
+	fprintf(file, "\t\tmodifier_map Mod5 {<I108>};\n");
 
 	fprintf(file, "\t};\n");
 }
@@ -571,12 +571,12 @@ status_t ProduceXkbKeymap(int &fd)
 	fd = CreateMemoryFile();
 	FileDescriptorCloser fdCloser(fd);
 	if (!fdCloser.IsSet())
-		return B_ERROR; // Use `errno`?
+		return B_ERROR;
 
 	FILE *file = fdopen(dup(fd), "w");
 	FileCloser fileCloser(file);
 	if (!fileCloser.IsSet())
-		return B_ERROR; // Use `errno`?
+		return B_ERROR;
 
 	fprintf(file, "xkb_keymap {\n");
 

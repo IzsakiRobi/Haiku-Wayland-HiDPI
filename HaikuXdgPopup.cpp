@@ -29,7 +29,7 @@ WaylandPopupWindow::WaylandPopupWindow(HaikuXdgPopup *popup, BRect frame, const 
 	BWindow(frame, title, look, feel, flags, workspace),
 	fPopup(popup)
 {
-	SetPulseRate(1000000 / 60); // 60 fps
+	SetPulseRate(1000000 / 60);
 }
 
 bool WaylandPopupWindow::QuitRequested()
@@ -45,7 +45,7 @@ void WaylandPopupWindow::DispatchMessage(BMessage *msg, BHandler *target)
 	switch (msg->what) {
 	case B_KEY_DOWN:
 	case B_UNMAPPED_KEY_DOWN:
-		// Do not use built-in shortcut handling.
+
 		target->MessageReceived(msg);
 		return;
 	}
@@ -102,8 +102,8 @@ HaikuXdgPopup::~HaikuXdgPopup()
 	if (fWindow != NULL) {
 		fWindow->fPopup = NULL;
 		fWindow->PostMessage(B_QUIT_REQUESTED);
-		//fWindow->Lock();
-		//fWindow->Quit();
+
+
 		fWindow = NULL;
 	}
 }
