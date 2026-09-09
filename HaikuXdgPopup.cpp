@@ -2,6 +2,7 @@
 #include "HaikuXdgSurface.h"
 #include "HaikuXdgPositioner.h"
 #include "WaylandEnv.h"
+#include "FractionalTrace.h"
 
 #include "AppKitPtrs.h"
 
@@ -60,6 +61,13 @@ void HaikuXdgPopup::UpdatePosition(struct wl_resource *_positioner)
 	fParent->ConvertFromScreen(workArea);
 
 	positioner->GetPosition(fPosition, workArea);
+	const auto& state = positioner->GetState();
+	FractionalTrace("xdg.popup_position surface=%p parent=%p size=%dx%d"
+		" anchor_rect=%d,%d %dx%d offset=%d,%d result=%.0f,%.0f %.0fx%.0f",
+		fXdgSurface->Surface(), fParent != NULL ? fParent->Surface() : NULL,
+		state.size.width, state.size.height, state.anchorRect.x, state.anchorRect.y,
+		state.anchorRect.width, state.anchorRect.height, state.offset.x, state.offset.y,
+		fPosition.left, fPosition.top, fPosition.Width() + 1, fPosition.Height() + 1);
 }
 
 HaikuXdgPopup *HaikuXdgPopup::Create(HaikuXdgSurface *xdgSurface, uint32_t id, struct wl_resource *_parent, struct wl_resource *_positioner)

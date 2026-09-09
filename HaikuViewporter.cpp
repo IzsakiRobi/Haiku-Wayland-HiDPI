@@ -1,5 +1,6 @@
 #include "HaikuViewporter.h"
 #include "Viewporter.h"
+#include "FractionalTrace.h"
 #include <AutoDeleter.h>
 
 extern const struct wl_interface wp_viewporter_interface;
@@ -65,21 +66,28 @@ void HaikuViewporter::HandleGetViewport(uint32_t id, struct wl_resource *surface
 		return;
 	}
 	viewport->fSurface = HaikuSurface::FromResource(surface);
+	FractionalTrace("viewport.create surface=%p viewport=%p", viewport->fSurface, viewport);
 }
 
 
 HaikuViewport::~HaikuViewport()
 {
+	FractionalTrace("viewport.destroy surface=%p viewport=%p", fSurface, this);
 	fSurface->SetViewportSrc(-1, -1, -1, -1);
 	fSurface->SetViewportDst(-1, -1);
 }
 
 void HaikuViewport::HandleSetSource(wl_fixed_t x, wl_fixed_t y, wl_fixed_t width, wl_fixed_t height)
 {
+	FractionalTrace("viewport.set_source surface=%p x=%.3f y=%.3f width=%.3f height=%.3f",
+		fSurface, wl_fixed_to_double(x), wl_fixed_to_double(y),
+		wl_fixed_to_double(width), wl_fixed_to_double(height));
 	fSurface->SetViewportSrc(wl_fixed_to_double(x), wl_fixed_to_double(y), wl_fixed_to_double(width), wl_fixed_to_double(height));
 }
 
 void HaikuViewport::HandleSetDestination(int32_t width, int32_t height)
 {
+	FractionalTrace("viewport.set_destination surface=%p width=%d height=%d",
+		fSurface, width, height);
 	fSurface->SetViewportDst(width, height);
 }

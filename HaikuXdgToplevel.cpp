@@ -5,6 +5,7 @@
 #include "HaikuSeat.h"
 #include "HaikuServerDecoration.h"
 #include "WaylandEnv.h"
+#include "FractionalTrace.h"
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
 #include <xdg-shell-protocol.h>
@@ -75,6 +76,8 @@ void WaylandWindow::WorkspacesChanged(uint32 oldWorkspace, uint32 newWorkspace)
 
 void WaylandWindow::FrameResized(float newWidth, float newHeight)
 {
+	FractionalTrace("haiku.frame_resized surface=%p native_width=%.1f native_height=%.1f",
+		fToplevel->XdgSurface()->Surface(), newWidth + 1, newHeight + 1);
 	WaylandEnv vlEnv(this);
 
 	if (fToplevel->fSizeChanged) {
@@ -162,6 +165,8 @@ void HaikuXdgToplevel::DoSendConfigure()
 	if (fState.activated ) {*p++ = XdgToplevel::stateActivated;}
 
 	state.size = (uint8_t*)p - (uint8_t*)state.data;
+	FractionalTrace("xdg.toplevel_configure surface=%p width=%d height=%d states=0x%x",
+		XdgSurface()->Surface(), fWidth, fHeight, fState.val);
 	SendConfigure(fWidth, fHeight, &state);
 }
 

@@ -4,6 +4,7 @@
 #include "HaikuXdgPopup.h"
 #include "HaikuCompositor.h"
 #include "HaikuServerDecoration.h"
+#include "FractionalTrace.h"
 #include <wayland-server-core.h>
 #include <wayland-server-protocol.h>
 #include <xdg-shell-protocol.h>
@@ -32,6 +33,11 @@ XdgSurfaceHook::XdgSurfaceHook(HaikuXdgSurface *xdgSurface):
 
 void XdgSurfaceHook::HandleCommit()
 {
+	FractionalTrace("xdg.commit surface=%p role=%s geometry_pending=%d,%d %dx%d valid=%d ack=%u",
+		fXdgSurface->Surface(), fXdgSurface->fPopup != NULL ? "popup" : "toplevel",
+		fXdgSurface->fPendingGeometry.x, fXdgSurface->fPendingGeometry.y,
+		fXdgSurface->fPendingGeometry.width, fXdgSurface->fPendingGeometry.height,
+		fXdgSurface->fPendingGeometry.valid, fXdgSurface->fAckSerial);
 	// TODO: move to HaikuXdgToplevel/HaikuXdgPopup
 	if (fXdgSurface->HasServerDecoration()) {
 		// toplevel: window size limits
@@ -196,6 +202,8 @@ void HaikuXdgSurface::HandleGetPopup(uint32_t id, struct wl_resource *parent, st
 
 void HaikuXdgSurface::HandleSetWindowGeometry(int32_t x, int32_t y, int32_t width, int32_t height)
 {
+	FractionalTrace("xdg.set_window_geometry surface=%p x=%d y=%d width=%d height=%d",
+		Surface(), x, y, width, height);
 	fPendingGeometry = {
 		.valid = true,
 		.x = x,
@@ -207,6 +215,7 @@ void HaikuXdgSurface::HandleSetWindowGeometry(int32_t x, int32_t y, int32_t widt
 
 void HaikuXdgSurface::HandleAckConfigure(uint32_t serial)
 {
+	FractionalTrace("xdg.ack_configure surface=%p serial=%u", Surface(), serial);
 	fAckSerial = serial;
 	fConfigurePending = false;
 }

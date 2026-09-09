@@ -6,6 +6,7 @@
 #include "HaikuXdgPopup.h"
 #include "HaikuSeat.h"
 #include "HaikuDataDeviceManager.h"
+#include "FractionalTrace.h"
 #include "Wayland.h"
 #include "WaylandEnv.h"
 #include <wayland-server-core.h>
@@ -597,6 +598,13 @@ void HaikuSurface::SetViewportDst(int32_t width, int32_t height)
 void HaikuSurface::HandleAttach(struct wl_resource *buffer_resource, int32_t dx, int32_t dy)
 {
 	fPendingState.buffer = HaikuShmBuffer::FromResource(buffer_resource);
+	if (fPendingState.buffer != NULL) {
+		BRect bounds = fPendingState.buffer->Bitmap().Bounds();
+		FractionalTrace("surface.attach surface=%p buffer=%p pixels=%.0fx%.0f offset=%d,%d",
+			this, fPendingState.buffer.Get(), bounds.Width() + 1, bounds.Height() + 1, dx, dy);
+	} else {
+		FractionalTrace("surface.attach surface=%p buffer=null offset=%d,%d", this, dx, dy);
+	}
 	fPendingState.dx = dx;
 	fPendingState.dy = dy;
 	fPendingFields |= (1 << fieldBuffer) | (1 << fieldOffset);
@@ -685,6 +693,20 @@ void HaikuSurface::HandleCommit()
 		}
 		BSize size = Size();
 		viewLocked->ResizeTo(size.width, size.height);
+		BRect frame = viewLocked->Frame();
+		BRect bounds = viewLocked->Bounds();
+		BRect windowFrame = viewLocked->Window()->Frame();
+		FractionalTrace("surface.commit surface=%p buffer_scale=%d"
+			" viewport_src=%.3f,%.3f %.3fx%.3f viewport_dst=%dx%d"
+			" logical_size=%.0fx%.0f view_frame=%.1f,%.1f..%.1f,%.1f"
+			" view_bounds=%.1f,%.1f..%.1f,%.1f window_frame=%.1f,%.1f..%.1f,%.1f",
+			this, fState.scale, fState.viewportSrc.x, fState.viewportSrc.y,
+			fState.viewportSrc.width, fState.viewportSrc.height,
+			fState.viewportDst.width, fState.viewportDst.height,
+			size.width + 1, size.height + 1,
+			frame.left, frame.top, frame.right, frame.bottom,
+			bounds.left, bounds.top, bounds.right, bounds.bottom,
+			windowFrame.left, windowFrame.top, windowFrame.right, windowFrame.bottom);
 		Invalidate();
 	}
 	if (fHook.IsSet()) {
@@ -700,6 +722,7 @@ void HaikuSurface::HandleSetBufferTransform(int32_t transform)
 
 void HaikuSurface::HandleSetBufferScale(int32_t scale)
 {
+	FractionalTrace("surface.set_buffer_scale surface=%p scale=%d", this, scale);
 	fPendingState.scale = scale;
 	fPendingFields |= (1 << fieldScale);
 }

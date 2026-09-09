@@ -4,6 +4,7 @@
 #include "HaikuXdgToplevel.h"
 #include "HaikuDataDeviceManager.h"
 #include "WaylandKeycodes.h"
+#include "FractionalTrace.h"
 #include "XkbKeymap.h"
 #include <SupportDefs.h>
 #include <InterfaceDefs.h>
@@ -298,6 +299,8 @@ void HaikuSeatGlobal::SetPointerFocus(HaikuSurface *surface, const BMessage &msg
 		} else if (msg.FindPoint("be:view_where", &where) < B_OK) where = B_ORIGIN;
 		switch (fTrack.id) {
 		case trackClient:
+			FractionalTrace("pointer.enter surface=%p haiku=%.3f,%.3f wayland=%.3f,%.3f",
+				surface, where.x, where.y, where.x, where.y);
 			for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 				if (pointer->Client() != surface->Client()) continue;
 				pointer->SendEnter(NextSerial(), surface->ToResource(), wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
@@ -581,6 +584,8 @@ bool HaikuSeatGlobal::MessageReceived(HaikuSurface *surface, BMessage *msg)
 			switch (fTrack.id) {
 				case trackNone:
 				case trackClient: {
+					FractionalTrace("pointer.motion surface=%p haiku=%.3f,%.3f wayland=%.3f,%.3f",
+						surface, where.x, where.y, where.x, where.y);
 					for (HaikuPointer *pointer = fPointerIfaces.First(); pointer != NULL; pointer = fPointerIfaces.GetNext(pointer)) {
 						if (pointer->Client() != fPointerFocus->Client()) continue;
 						pointer->SendMotion(when / 1000, wl_fixed_from_double(where.x), wl_fixed_from_double(where.y));
