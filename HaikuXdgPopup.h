@@ -21,8 +21,6 @@ public:
 	virtual ~HaikuXdgPopup();
 
 	HaikuXdgSurface *XdgSurface() {return fXdgSurface;}
-	HaikuXdgSurface *Parent() {return fParent;}
-	BRect Position() const {return fPosition;}
 	BWindow *Window() {return (BWindow*)fWindow;}
 
 	void HandleGrab(struct wl_resource *seat, uint32_t serial) final;

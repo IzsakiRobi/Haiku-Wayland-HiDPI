@@ -55,7 +55,6 @@ public:
 	struct GeometryInfo Geometry() {return fGeometry;}
 	HaikuSurface *Surface() {return fSurface;}
 	HaikuXdgToplevel *Toplevel() {return fToplevel;}
-	HaikuXdgPopup *Popup() {return fPopup;}
 	BWindow *Window();
 	bool HasServerDecoration();
 	void ConvertFromScreen(BPoint &pt);
