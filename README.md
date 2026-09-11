@@ -1,9 +1,10 @@
 # Haiku Wayland HiDPI noScale
 
 This branch keeps the original fixed 1× Wayland rendering from
-[X547/wayland-server](https://github.com/X547/wayland-server) and changes only
-cursor handling. Wayland applications use Haiku's native system cursor, so the
-cursor follows the desktop cursor-size setting.
+[X547/wayland-server](https://github.com/X547/wayland-server). Wayland
+applications use Haiku's native system cursor, so the cursor follows the
+desktop cursor-size setting. Parent-backed popup composition preserves alpha
+and prevents translucent menu shadows from accumulating during redraws.
 
 It is intended as a clean base for testing Haiku `app_server` synchronization
 without compositor-side UI scaling.
